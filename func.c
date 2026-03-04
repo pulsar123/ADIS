@@ -368,7 +368,7 @@ void sigma_clipping(double *image, long plane_pixels, double Nsigma, double *p0,
 		Npix = 0;
 		for (long j=0; j<Nj; j++)
 		{
-			double Sj = Y[j]/X[j];  // Explicitly using the fact that both images should have bias=0
+			double Sj = log10(Y[j]/X[j]);  // Explicitly using the fact that both images should have bias=0
 			if (fabs(Sj - S) < 3*sgm)
 			{
 				sum = sum + W[j]*Sj;
@@ -384,9 +384,9 @@ void sigma_clipping(double *image, long plane_pixels, double Nsigma, double *p0,
 	while(Npix != Npix_old);
 
 	if (verbose)
-	    printf("%d %e %e %ld\n", k, sgm, S, Npix);
+	    printf("%d %e %e %ld\n", k, sgm, pow(10.0,S), Npix);
 	  
-	return S;
+	return pow(10.0,S);
   }
 
 /* ------------------------------------------------ */

@@ -1,5 +1,6 @@
 #ifndef MYMAIN_H
 #define MYMAIN_H
+extern int verbose;
 #endif
 
 #include <stdio.h>
@@ -11,7 +12,6 @@
 
 #define IDX(x,y,Ny) ((x)*(Ny) + (y))
 
-static int verbose = 0;
 
 
 void fits_error(int status);

@@ -4,6 +4,8 @@
 
 #include "reconv.h"
 
+int	verbose = 0;
+
 
 int main(int argc, char **argv)
 {
@@ -17,7 +19,9 @@ int main(int argc, char **argv)
 		printf(" Optional arguments [default value]:\n\n");
 		printf(" -bias value  :  bias for the output image [0]\n");
 		printf(" -blur sigma  :  sigma for the Gaussian blur for the input image [0]\n");
+		printf(" -bmax value  :  erase image pixels above this many master std [0]\n");
 		printf(" -k image_name:  output kernel image\n");
+		printf(" -no_rescale  :  do not rescale brightness\n");
 		printf(" -v           :  verbose\n");
 		printf("\n");		
 		exit(0);
@@ -32,6 +36,8 @@ int main(int argc, char **argv)
 	int dump_kernel = 0;
 	double sgm_blur = 0.0;
 	int perform_blur = 0;
+	int no_rescale = 0;
+	double bmax = -1.0;
 	
 	int N_obligatory = 4; // Number of obligatory arguments
 	int j = 1;
@@ -136,6 +142,24 @@ int main(int argc, char **argv)
 			perform_blur = 1;
 		}						
 
+		// No brightness rescale (0 by default):
+		if (strcmp(argv[j],"-no_rescale") == 0)
+		{
+			no_rescale = 1;
+		}						
+		
+		// Gaussian blur sigma in pixels:
+		if (strcmp(argv[j],"-bmax") == 0)
+		{
+			j++;
+			if (argv[j][0] == '-' || j>=argc)
+			{
+				error = j-1;
+				break;
+			}
+			bmax = atof(argv[j]);
+		}						
+
 		j++;
 	} // /end of argv while loop
 	
@@ -225,6 +249,7 @@ int main(int argc, char **argv)
     int cx = Px/2;
     int cy = Py/2;
 
+	double Sinc = 0.0;
 
 	// Full processing, separately for each channel (R, G, B)
     for (int c=0;c<3;c++) {
@@ -289,17 +314,46 @@ int main(int argc, char **argv)
 
 		// The low cutoff value:
 		double p1_low = Nsigma_cutoff * sgm1;
+		
+		// Transitional brightness range for the master image:
+		double PM_DELTA = 0.1; // Determines the half-width of the transitional brightness range
+		double pm_min = bmax*(1-PM_DELTA)*sgm_master;
+		double pm_max = bmax*(1+PM_DELTA)*sgm_master;
 	
 		// Computing scaling coeficient S between the convolved master cropped and input image img1:
-		double S = scaling(img1, cropped, plane_pixels, p1_low);
-
+		double S;
+		if (no_rescale)
+			S = 1.0;
+		else
+			S = scaling(img1, cropped, plane_pixels, p1_low);
+		
 		// Applying the scaling to the convolved master, and subtracting the result from the input image:
 		for (long i=0; i<plane_pixels; i++)
 		{
-			outbuf[c*plane_pixels + i] = outbias + img1[i] - S*cropped[i];
+			double p = img1[i] - S*cropped[i];
+			double w;
+			if (bmax < 0.0 || cropped[i] < pm_min)
+			{
+				w = 1.0;
+			}
+			else if (cropped[i] > pm_max)
+			{
+				w = 0.0;
+			}
+			else
+			{
+				double t = (cropped[i] - pm_min)/(pm_max - pm_min);
+				// w(t) = 1 at t=0, =0.5 at t=0.5, =0 at t=1, and zero derivatives on both ends
+				w = 1.0 + t*t*(-3.0 + 2.0*t);
+			}
+			outbuf[c*plane_pixels + i] = outbias + w*p;
+			Sinc = Sinc + w;
 		}
 
 	}  // color channels loop
+
+	if (verbose && bmax >= 0.0)
+		printf("\nExcluded pixels fraction: %f\n",(3*plane_pixels-Sinc)/plane_pixels/3);
 
     fftw_free(F);
     free(padded_out);
