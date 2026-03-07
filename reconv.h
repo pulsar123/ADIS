@@ -1,14 +1,14 @@
-#ifndef MYMAIN_H
-#define MYMAIN_H
-extern int verbose;
-#endif
-
+#include <sys/time.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
 #include <fftw3.h>
 #include <fitsio.h>
 #include <string.h>
+#ifdef _OPENMP
+  // OpenMP is enabled
+  #include <omp.h>
+#endif
 
 #define IDX(x,y,Ny) ((x)*(Ny) + (y))
 
@@ -57,9 +57,21 @@ void crop_image_centered(int Nx, int Ny,
                          double *padded,
                          double *out);
 
-void sigma_clipping(double *image, long plane_pixels, double Nsigma, double *p0, double *sgm, long *Npix);
+void sigma_clipping(double *image, long plane_pixels, double Nsigma, double *p0, double *sgm, long *Npix, int *k);
 
-double scaling (double *image1, double *master, long plane_pixels, double p1_low);
+double scaling (double *image1, double *master, long plane_pixels, double p1_low, int *k);
 
 void gauss_blur(int Nx, int Ny, double* img, double sgm);
+
+int timeval_subtract (double *result, struct timeval *x, struct timeval *y);
+
+#ifdef _OPENMP
+void init_all_locks();
+#endif	
+
+#ifndef MYMAIN_H
+  #define MYMAIN_H
+  extern int verbose;
+#endif
+
 

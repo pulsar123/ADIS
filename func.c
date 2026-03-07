@@ -1,6 +1,46 @@
 #include "reconv.h"
 
+#ifdef _OPENMP
+#define NLOCKS 10
+omp_lock_t my_lock[NLOCKS];
+#endif
+
+int timeval_subtract (double *result, struct timeval *x, struct timeval *y)
+{
+  struct timeval result0;
+
+  /* Perform the carry for the later subtraction by updating y. */
+  if (x->tv_usec < y->tv_usec) {
+    int nsec = (y->tv_usec - x->tv_usec) / 1000000 + 1;
+    y->tv_usec -= 1000000 * nsec;
+    y->tv_sec += nsec;
+  }
+  if (x->tv_usec - y->tv_usec > 1000000) {
+    int nsec = (y->tv_usec - x->tv_usec) / 1000000;
+    y->tv_usec += 1000000 * nsec;
+    y->tv_sec -= nsec;
+  }
+
+  /* Compute the time remaining to wait.
+     tv_usec is certainly positive. */
+  result0.tv_sec = x->tv_sec - y->tv_sec;
+  result0.tv_usec = x->tv_usec - y->tv_usec;
+  *result = ((double)result0.tv_usec)/1e6 + (double)result0.tv_sec;
+
+  /* Return 1 if result is negative. */
+  return x->tv_sec < y->tv_sec;
+}
+
+
 /* ------------------------------------------------ */
+
+#ifdef _OPENMP
+void init_all_locks()
+{
+	for (int i=0; i<NLOCKS; i++)
+		omp_init_lock(&my_lock[i]);
+}
+#endif
 
 
 void fft_image(int Nx, int Ny,
@@ -15,9 +55,25 @@ void fft_image(int Nx, int Ny,
         in[i][0] = img0[i];
         in[i][1] = 0.0;
     }
+
+    #ifdef _OPENMP
+	omp_set_lock(&my_lock[0]);
+	#endif
     p = fftw_plan_dft_2d(Nx, Ny, in, F0, FFTW_FORWARD, FFTW_ESTIMATE);
+    #ifdef _OPENMP
+	omp_unset_lock(&my_lock[0]);
+	#endif
+
     fftw_execute(p);
+
+    #ifdef _OPENMP
+	omp_set_lock(&my_lock[1]);
+	#endif
     fftw_destroy_plan(p);
+    #ifdef _OPENMP
+	omp_unset_lock(&my_lock[1]);
+	#endif
+	
 
     fftw_free(in);
 }
@@ -54,11 +110,25 @@ void ifft_kernel(int Nx, int Ny,
                  fftw_complex *k_spatial)
 {
 	// Inverse FFT: K -> k_spatial
+	fftw_plan p;
+
+    #ifdef _OPENMP
+	omp_set_lock(&my_lock[2]);
+	#endif
+	p = fftw_plan_dft_2d(Nx, Ny, K, k_spatial, FFTW_BACKWARD, FFTW_ESTIMATE);
+    #ifdef _OPENMP
+	omp_unset_lock(&my_lock[2]);
+	#endif
 	
-    fftw_plan p = fftw_plan_dft_2d(Nx, Ny, K, k_spatial,
-                                  FFTW_BACKWARD, FFTW_ESTIMATE);
     fftw_execute(p);
+	
+    #ifdef _OPENMP
+	omp_set_lock(&my_lock[3]);
+	#endif
     fftw_destroy_plan(p);
+    #ifdef _OPENMP
+	omp_unset_lock(&my_lock[3]);
+	#endif
 
     double norm = 1.0 / (Nx * Ny);
     for (int i=0;i<Nx*Ny;i++) {
@@ -140,10 +210,25 @@ void fft_kernel(int Nx, int Ny,
                 fftw_complex *k_spatial,
                 fftw_complex *K)
 {
-    fftw_plan p = fftw_plan_dft_2d(Nx, Ny, k_spatial, K,
-                                  FFTW_FORWARD, FFTW_ESTIMATE);
+	fftw_plan p;
+	
+    #ifdef _OPENMP
+	omp_set_lock(&my_lock[4]);
+	#endif
+    p = fftw_plan_dft_2d(Nx, Ny, k_spatial, K, FFTW_FORWARD, FFTW_ESTIMATE);
+    #ifdef _OPENMP
+	omp_unset_lock(&my_lock[4]);
+	#endif
+	
     fftw_execute(p);
+
+    #ifdef _OPENMP
+	omp_set_lock(&my_lock[5]);
+	#endif
     fftw_destroy_plan(p);
+    #ifdef _OPENMP
+	omp_unset_lock(&my_lock[5]);
+	#endif
 }
 
 /* ------------------------------------------------ */
@@ -167,10 +252,24 @@ void convolve_image(int Nx, int Ny,
     }
 
     /* inverse FFT */
-    fftw_plan p = fftw_plan_dft_2d(Nx, Ny, Fout, Fout,
-                                  FFTW_BACKWARD, FFTW_ESTIMATE);
+	fftw_plan p;
+    #ifdef _OPENMP
+	omp_set_lock(&my_lock[6]);
+	#endif
+    p = fftw_plan_dft_2d(Nx, Ny, Fout, Fout, FFTW_BACKWARD, FFTW_ESTIMATE);
+    #ifdef _OPENMP
+	omp_unset_lock(&my_lock[6]);
+	#endif
+	
     fftw_execute(p);
+
+    #ifdef _OPENMP
+	omp_set_lock(&my_lock[7]);
+	#endif
     fftw_destroy_plan(p);
+    #ifdef _OPENMP
+	omp_unset_lock(&my_lock[7]);
+	#endif
 
     double norm = 1.0 / (Nx * Ny);
     for (int i=0;i<Nx*Ny;i++)
@@ -215,10 +314,23 @@ void fft_images_padded(int Nx, int Ny,
         in[i][1] = 0.0;
     }
 	// Direct 2D FFT transform in (padded img0 with zero imaginary part) -> F0.
-    plan = fftw_plan_dft_2d(Px, Py, in, F0,
-                            FFTW_FORWARD, FFTW_ESTIMATE);
+    #ifdef _OPENMP
+	omp_set_lock(&my_lock[8]);
+	#endif
+    plan = fftw_plan_dft_2d(Px, Py, in, F0, FFTW_FORWARD, FFTW_ESTIMATE);
+    #ifdef _OPENMP
+	omp_unset_lock(&my_lock[8]);
+	#endif
+
     fftw_execute(plan);
+
+    #ifdef _OPENMP
+	omp_set_lock(&my_lock[9]);
+	#endif
     fftw_destroy_plan(plan);
+    #ifdef _OPENMP
+	omp_unset_lock(&my_lock[9]);
+	#endif
 
     fftw_free(in);
     free(p0);
@@ -258,22 +370,19 @@ void fits_error(int status)
 /* ------------------------------------------------ */
 
 
-void sigma_clipping(double *image, long plane_pixels, double Nsigma, double *p0, double *sgm, long *Npix)
+void sigma_clipping(double *image, long plane_pixels, double Nsigma, double *p0, double *sgm, long *Npix, int *k)
 // Doing sigma-cliipping for the input monochrome image. Outputs: offset p0, std sgm, number of good pixels Npix.
 {
   *p0 = 0.0;
   *sgm = 1e12;
   *Npix = -1;
   long Npix_old = -2;
-  int k = 0;
-
-  if (verbose)
-	printf("Sigma clipping:\n");
+  *k = 0;
 
   while (*Npix != Npix_old)
   {
 
-    k++;
+    *k = *k + 1;
     Npix_old = *Npix;
     double sum = 0.0;
     double sum2 = 0.0;
@@ -295,9 +404,6 @@ void sigma_clipping(double *image, long plane_pixels, double Nsigma, double *p0,
 
   }
 
-	if (verbose)
-		printf("%d %e %e %ld\n", k, *sgm, *p0, *Npix);
- 
 	// Bias subtraction
     for (long i = 0; i < plane_pixels; i++)
     {
@@ -310,7 +416,7 @@ void sigma_clipping(double *image, long plane_pixels, double Nsigma, double *p0,
 
 /* ------------------------------------------------ */
 
-  double scaling (double *image1, double *master, long plane_pixels, double p1_low)
+  double scaling (double *image1, double *master, long plane_pixels, double p1_low, int *k)
   {
 	  // Computing the scaling between the convolved master image and the individual image1.
 	  // Both images need their bias removed in advance
@@ -348,19 +454,16 @@ void sigma_clipping(double *image, long plane_pixels, double Nsigma, double *p0,
 		}
 	}
 
-	if (verbose)
-		printf("Scaling:\n");
-	
 	// Finding scaling S
 	double S = 1.0;
 	double sgm = 1e12;
 	long Npix = -1;
 	long Npix_old;
-	int k=0;
+	*k=0;
 	// 3-sigma clipping
 	do
 	{
-		k++;
+		*k = *k + 1;
 		double sum = 0.0;
 		double sum2 = 0.0;
 		double sumW = 0.0;
@@ -382,9 +485,6 @@ void sigma_clipping(double *image, long plane_pixels, double Nsigma, double *p0,
         sgm = sqrt(sum2 / sumW - S*S);	
 	} 
 	while(Npix != Npix_old);
-
-	if (verbose)
-	    printf("%d %e %e %ld\n", k, sgm, pow(10.0,S), Npix);
 	  
 	return pow(10.0,S);
   }
@@ -439,3 +539,4 @@ void sigma_clipping(double *image, long plane_pixels, double Nsigma, double *p0,
 
 
 /* ------------------------------------------------ */
+

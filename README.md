@@ -11,6 +11,14 @@ To compile (adjust -I parameter accordingly):
 
 gcc -O3 -Wall reconv.c func.c -I /usr/include/cfitsio/ -lfftw3 -lcfitsio -lm -o reconv
 
+Now there is also a multi-threading (OpenMP) option available in the code. I achieve ~2x speedup (vs the serial option). For my 20-megapixels RGB FITS images, the multi-threading timing is 10 seconds. It is ~20 seconds for the serial version. For comparison, StarNet takes 67 seconds on my PC (and it's using the GPU).
+
+To compile the code as muilti-threaded, add -fopenmp to the avove command:
+
+gcc -fopenmp -O3 -Wall reconv.c func.c -I /usr/local/include -L /usr/local/lib -lfftw3 -lcfitsio -lm -lz -lcurl -o reconv
+
+Also you may need to compile Cfitsio library yourself, using "./configure --enable-reentrant" command before running "make" (this is to make the image read fuunction thread-safe).
+
 Options:
 
 -i input_image: input FITS image: individual image from the series
@@ -51,7 +59,7 @@ The basic algorithm is as follows:
   
   2e) Derive the kernel via complex division: KF=IF/MF, and then inverse FFT KF->K (this kernel is such that when we convolve MC with the kernel K, we get IC)
   
-  2f) Erase to zero the kernel K beyond R pixels from the center. The transition is smooth, using a cubic spline with zero derivatives at both ends. Pixels up to R/2 away from the center are not modified. outside R/2 the pixels are gradually driven to zero, with all pixels = 0 beyond R pixels.
+  2f) Erase to zero the kernel K beyond R pixels from the center. The transition is smooth, using a cubic spline with zero derivatives at both ends. Pixels up to R/2 away from the center are not modified. Outside R/2 the pixels are gradually driven to zero, with all pixels = 0 beyond R pixels.
   
   2g) Use FFT to convolve MC with the truncated kernel, the result is M1. Now the master image is blurred in exactly the same way as the individual image (on small scales).
   
@@ -59,11 +67,11 @@ The basic algorithm is as follows:
   
   2i) The output image channel is computed as OC=IC-S*M1 .
   
-  2j) The final optional step is to erase (to the bias value) all pixels in OC which are bmax std units above the bias in the convolved master image (M1). The erasure using a cubic spline for a smooth transition. This is to deal with artifacts from brightest stars.
+  2j) The final optional step is to erase (to the bias value) all pixels in OC which are bmax std units above the bias in the convolved master image (M1). The erasure uses a cubic spline for a smooth transition. This is to deal with artifacts from brightest stars.
   
 3) Copy FITS header from I to the output image O, and write O to the disk.
 
-This procedure modifies the master image in such way that it becomes as close as possible to the individual image (in terms of blurness and brightness), and then subtracts the modified master image from the individual image. This ensures all faint and intertmediate brightness static objects are erased. Brightest stars leave some residual signal, which can be handled by the -bmax option (erasing brightes pixels). The only remaining signal is from transient objects or events - slowly moving asteroids and comets, satellites, comic rays etc.
+This procedure modifies the master image in such way that it becomes as close as possible to the individual image (in terms of blurness and brightness), and then subtracts the modified master image from the individual image. This ensures all faint and intertmediate brightness static objects are erased. Brightest stars leave some residual signal, which can be handled by the -bmax option (erasing brightest pixels). The only remaining signal is from transient objects or events - slowly moving asteroids and comets, satellites, cosmic rays etc.
 
 The output imaging sequence can now be used for a fully automated discovery of moving objects in the series (using GPU acceleration to make this feaseable). I am working on such code now.
 

@@ -6,9 +6,13 @@
 
 int	verbose = 0;
 
+const int BUFFER_SIZE=1000;    // Make buffer size large enough for all print statements
+
 
 int main(int argc, char **argv)
 {
+    struct timeval  tdr0, tdr1, tdr;
+    double restime;
 	
 	// Processing command line arguments
 	
@@ -180,6 +184,17 @@ int main(int argc, char **argv)
     int status = 0, naxis;
     long naxes[3];
 
+// Number of OpenMP therads to use:
+	#ifdef _OPENMP
+	int NOMP = 3;
+	omp_set_num_threads(3);
+    init_all_locks();
+	if (verbose)
+		printf("\nOpenMP: using %d threads\n",NOMP);
+	#else
+	int NOMP = 1;
+	#endif	
+
     /* ---------- Open Master ---------- */
     fits_open_file(&f0, file0, READONLY, &status);
     fits_error(status);
@@ -198,21 +213,35 @@ int main(int argc, char **argv)
     int Nc = 3;
     long plane_pixels = (long)Nx * Ny;
 
-    /* ---------- Read Master RGB ---------- */
-    float *buf0 = malloc(sizeof(float) * plane_pixels * Nc);
+    fits_open_file(&f1, file1, READONLY, &status);
+    fits_error(status);	
+	
+	float *buf0;
+	float *buf1;
+
+	// In OmpenMP, reading the Master and Input files in parallel
+	// (requires the Cfitsio library to be compiled with ./configure --enable-reentrant option)
+	#pragma omp parallel sections firstprivate(status)
+	{
+	#pragma omp section
+	{
+    buf0 = (float *)malloc(sizeof(float) * plane_pixels * Nc);
     fits_read_img(f0, TFLOAT, 1,
                   plane_pixels * Nc, NULL, buf0, NULL, &status);
     fits_error(status);
-    fits_close_file(f0, &status);
+    fits_close_file(f0, &status);		
+	}
 	
-    /* ---------- Read Image1 RGB ---------- */
-    fits_open_file(&f1, file1, READONLY, &status);
-    fits_error(status);
-
-    float *buf1 = malloc(sizeof(float) * plane_pixels * Nc);
+	#pragma omp section
+	{
+    buf1 = (float *)malloc(sizeof(float) * plane_pixels * Nc);
     fits_read_img(f1, TFLOAT, 1,
                   plane_pixels * Nc, NULL, buf1, NULL, &status);
-    fits_error(status);
+    fits_error(status);				
+	}		
+	} // pragma section
+
+
     fits_create_file(&fout, file_out, &status);
     fits_error(status);
 	fits_copy_header(f1, fout, &status);
@@ -223,24 +252,32 @@ int main(int argc, char **argv)
     int Py = Ny + (int)(2*Pad);
     int P  = Px * Py;
 
-    double *img0 = malloc(sizeof(double) * plane_pixels);
-    double *img1 = malloc(sizeof(double) * plane_pixels);
+    gettimeofday (&tdr0, NULL);  
 
-    fftw_complex *F0 = fftw_malloc(sizeof(fftw_complex)*P);
-    fftw_complex *F1 = fftw_malloc(sizeof(fftw_complex)*P);
-    fftw_complex *K  = fftw_malloc(sizeof(fftw_complex)*P);
-    fftw_complex *k_spatial = fftw_malloc(sizeof(fftw_complex)*P);
+    double *img0 = malloc(sizeof(double) * plane_pixels * NOMP);
+    double *img1 = malloc(sizeof(double) * plane_pixels * NOMP);
+
+    fftw_complex *F0 = fftw_malloc(sizeof(fftw_complex)*P * NOMP);
+    fftw_complex *F1 = fftw_malloc(sizeof(fftw_complex)*P * NOMP);
+    fftw_complex *K  = fftw_malloc(sizeof(fftw_complex)*P * NOMP);
+    fftw_complex *k_spatial = fftw_malloc(sizeof(fftw_complex)*P * NOMP);
+
+    double *img = malloc(sizeof(double) * plane_pixels * NOMP);
+    fftw_complex *F = fftw_malloc(sizeof(fftw_complex)*P * NOMP);
+    double *padded_out = malloc(sizeof(double)*P * NOMP);
+    double *cropped = malloc(sizeof(double)*plane_pixels * NOMP);
 
     float *outbuf = malloc(sizeof(float) * plane_pixels * Nc);
-    double *img = malloc(sizeof(double) * plane_pixels);
-    fftw_complex *F = fftw_malloc(sizeof(fftw_complex)*P);
-    double *padded_out = malloc(sizeof(double)*P);
-    double *cropped = malloc(sizeof(double)*plane_pixels);
-	float *kernel;
+	float *kernel = NULL;
 	if (dump_kernel)
 	{
 		kernel = (float*)malloc(sizeof(float) * Px*Py * Nc);
 	}
+
+    gettimeofday (&tdr1, NULL);  
+    tdr = tdr0;
+    timeval_subtract (&restime, &tdr1, &tdr);
+//    printf ("time: %e\n", restime);
 
     double eps = 1e-8;
 	double Nsigma = 3.0;
@@ -249,47 +286,57 @@ int main(int argc, char **argv)
     int cx = Px/2;
     int cy = Py/2;
 
-	double Sinc = 0.0;
+	double Sinc = 0.0;	
 
 	// Full processing, separately for each channel (R, G, B)
-    for (int c=0;c<3;c++) {
-		if (verbose)
-			printf("\n=== Channel %d ===\n",c);
-
-
+	#pragma omp parallel
+	#pragma omp for reduction(+:Sinc) ordered
+	for (int c=0; c<3; c++) 
+	
+	{
+		#ifdef _OPENMP
+		int ithread = omp_get_thread_num();
+		#else
+		int ithread = 0;
+		#endif		
+		
+		int k_master, k1;
+		int k_scale = 0;
+		
 		// Extracting the channel for the master image
 	    for (long i=0;i<plane_pixels;i++)
-			img0[i] = buf0[c*plane_pixels + i];
+			img0[ithread*plane_pixels + i] = buf0[c*plane_pixels + i];
 		// Extracting the channel for the individual image
 	    for (long i=0;i<plane_pixels;i++)
-			img1[i] = buf1[c*plane_pixels + i];
+			img1[ithread*plane_pixels + i] = buf1[c*plane_pixels + i];
 
 		if (perform_blur)
 		{
-			gauss_blur(Nx, Ny, img1, sgm_blur);
+			gauss_blur(Nx, Ny, &img1[ithread*plane_pixels], sgm_blur);
 		}
 
 		double p1, sgm1, p_master, sgm_master;
 		long Npix1, Npix_master;
 
 		//3-sigma clipping and bias removal for the master image
-		sigma_clipping(img0, plane_pixels, Nsigma, &p_master, &sgm_master, &Npix_master);
+		sigma_clipping(&img0[ithread*plane_pixels], plane_pixels, Nsigma, &p_master, &sgm_master, &Npix_master, &k_master);
+
 		//3-sigma clipping and bias removal for the individual image
-		sigma_clipping(img1, plane_pixels, Nsigma, &p1, &sgm1, &Npix1);
+		sigma_clipping(&img1[ithread*plane_pixels], plane_pixels, Nsigma, &p1, &sgm1, &Npix1, &k1);
 			
 		// Direct 2D FFT transform of padded img0/img1 with zero imaginary part -> F0/F1
-		fft_images_padded(Nx, Ny, Px, Py, img0, F0, Pad);
-		fft_images_padded(Nx, Ny, Px, Py, img1, F1, Pad);
+		fft_images_padded(Nx, Ny, Px, Py, &img0[ithread*plane_pixels], &F0[ithread*P], Pad);
+		fft_images_padded(Nx, Ny, Px, Py, &img1[ithread*plane_pixels], &F1[ithread*P], Pad);
 
 		/* ---------- Kernel estimation ---------- */
 		// Complex division F1/F0 = K
-		derive_kernel_ft(P, F1, F0, K, eps);
+		derive_kernel_ft(P, &F1[ithread*P], &F0[ithread*P], &K[ithread*P], eps);
 	
 		// Inverse FFT: K -> k_spatial (the kernel in real space)
-		ifft_kernel(Px, Py, K, k_spatial);
+		ifft_kernel(Px, Py, &K[ithread*P], &k_spatial[ithread*P]);
 		
 		// Truncating the kernel beyond R radius
-		truncate_kernel(Px, Py, k_spatial, R);
+		truncate_kernel(Px, Py, &k_spatial[ithread*P], R);
 
 		if (dump_kernel)
 		{
@@ -299,18 +346,18 @@ int main(int argc, char **argv)
 					int xs = (x + cx) % Px;
 					int ys = (y + cy) % Py;
 					long i = IDX(x,y,Py);
-					kernel[c*Px*Py + IDX(xs,ys,Py)] = outbias + sqrt(pow(k_spatial[i][0],2)+pow(k_spatial[i][1],2));
+					kernel[c*Px*Py + IDX(xs,ys,Py)] = outbias + sqrt(pow(k_spatial[ithread*P+i][0],2)+pow(k_spatial[ithread*P+i][1],2));
 				}
 			}
 		}
 
 		// Direct FFT: k_spatial -> K
-		fft_kernel(Px, Py, k_spatial, K);
+		fft_kernel(Px, Py, &k_spatial[ithread*P], &K[ithread*P]);
 
-        convolve_image(Px, Py, F0, K, padded_out);
+        convolve_image(Px, Py, &F0[ithread*P], &K[ithread*P], &padded_out[ithread*P]);
 
         /* crop */
-		crop_image_centered(Nx, Ny, Px, Py, padded_out, cropped);
+		crop_image_centered(Nx, Ny, Px, Py, &padded_out[ithread*P], &cropped[ithread*plane_pixels]);
 
 		// The low cutoff value:
 		double p1_low = Nsigma_cutoff * sgm1;
@@ -325,24 +372,26 @@ int main(int argc, char **argv)
 		if (no_rescale)
 			S = 1.0;
 		else
-			S = scaling(img1, cropped, plane_pixels, p1_low);
+		{
+			S = scaling(&img1[ithread*plane_pixels], &cropped[ithread*plane_pixels], plane_pixels, p1_low, &k_scale);
+		}
 		
 		// Applying the scaling to the convolved master, and subtracting the result from the input image:
 		for (long i=0; i<plane_pixels; i++)
 		{
-			double p = img1[i] - S*cropped[i];
+			double p = img1[ithread*plane_pixels+i] - S*cropped[ithread*plane_pixels+i];
 			double w;
-			if (bmax < 0.0 || cropped[i] < pm_min)
+			if (bmax < 0.0 || cropped[ithread*plane_pixels+i] < pm_min)
 			{
 				w = 1.0;
 			}
-			else if (cropped[i] > pm_max)
+			else if (cropped[ithread*plane_pixels+i] > pm_max)
 			{
 				w = 0.0;
 			}
 			else
 			{
-				double t = (cropped[i] - pm_min)/(pm_max - pm_min);
+				double t = (cropped[ithread*plane_pixels+i] - pm_min)/(pm_max - pm_min);
 				// w(t) = 1 at t=0, =0.5 at t=0.5, =0 at t=1, and zero derivatives on both ends
 				w = 1.0 + t*t*(-3.0 + 2.0*t);
 			}
@@ -350,10 +399,22 @@ int main(int argc, char **argv)
 			Sinc = Sinc + w;
 		}
 
+	#pragma omp ordered
+	if (verbose)
+	{
+		printf("\n=== Channel %d ===\n",c);
+		printf("Sigma clipping:\n");		
+		printf("Master : %d %e %e %ld\n", k_master, sgm_master, p_master, Npix_master);		
+		printf("Image  : %d %e %e %ld\n", k1, sgm1, p1, Npix1);		
+		printf("Scaling: %d %e\n", k_scale, S);		
+	}
+
 	}  // color channels loop
 
 	if (verbose && bmax >= 0.0)
+	{
 		printf("\nExcluded pixels fraction: %f\n",(3*plane_pixels-Sinc)/plane_pixels/3);
+	}
 
     fftw_free(F);
     free(padded_out);
@@ -403,6 +464,7 @@ int main(int argc, char **argv)
 	}
 
     fftw_cleanup();
+	
 
     return EXIT_SUCCESS;
 }
