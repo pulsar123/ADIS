@@ -1,0 +1,29 @@
+#include <sys/time.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include <fftw3.h>
+#include <fitsio.h>
+#include <string.h>
+
+#ifndef ASTEROID_SEARCH_H
+  #define ASTEROID_SEARCH_H
+  #include "cuda_errors.h"
+#endif
+
+#ifdef _OPENMP
+  // OpenMP is enabled
+  #include <omp.h>
+#endif
+
+
+void fits_error(int status);
+
+void Is_GPU_present();
+
+int timeval_subtract (double *result, struct timeval *x, struct timeval *y);
+
+void image_bw(float *image, long Npix, int Nc);
+
+void crop_and_rebin(int i_image, float *buf0, int *Nx, int *Ny, long *Npix, float** h_image);
+
