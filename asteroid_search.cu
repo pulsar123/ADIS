@@ -3,10 +3,11 @@ in the imaging sequence which was pre-processed with "reconv". Uses GPU accelera
 
 To compile:
 
-nvcc -O3 asteroid_search.cu func2.cu -lfftw3 -lcfitsio -lm -lz -o asteroid_search
+nvcc -O3 asteroid_search.cu func.c func2.cu -lfftw3 -lcfitsio -lm -lz -o asteroid_search
 
 */
 
+#include "reconv.h"
 #include "asteroid_search.h"
 
 int main(int argc, char **argv)
@@ -17,8 +18,11 @@ int main(int argc, char **argv)
     long naxes[3];
 	long Npix;
 	int Nx, Ny, Nc;
-	float *buf0;
+	float *buf0; // host
+	float *d_img1; // device
+	float *d_img2; // device
 	size_t pitch;
+	float FWHM = 5.0;
 
 	// Processing command line arguments
 	
@@ -38,6 +42,7 @@ int main(int argc, char **argv)
 	ERR( cudaMallocHost(&d_image, N_images*sizeof(float*)) )
 	float *h_image = NULL;
 	
+	float sgm_Gauss = FWHM / sqrt(8*log(2.0));
 	
 	// Reading input FITS images one by one, using cudaMemcpyAsync to do concurrent copying to the GPU
 	for (int i_image=0; i_image<N_images; i_image++)
@@ -67,6 +72,9 @@ int main(int argc, char **argv)
 			Nc = 3;
 			Npix = (long)Nx * Ny;
 			buf0 = (float *)malloc(sizeof(float) * Npix * Nc);
+			// These will be used for gaussian blur and background subtraction:
+//			ERR( cudaMallocPitch(&d_img1, &pitch, (size_t)(Ny*sizeof(float)), Nx) )
+//			ERR( cudaMallocPitch(&d_img2, &pitch, (size_t)(Ny*sizeof(float)), Nx) )
 		}
 		else
 		{
@@ -80,20 +88,27 @@ int main(int argc, char **argv)
 		fits_read_img(f0, TFLOAT, 1, Npix * Nc, NULL, buf0, NULL, &status);
 		fits_error(status);
 		fits_close_file(f0, &status);		
-printf("1\n");				
 		image_bw(buf0, Npix, Nc);  // Turn the image into black and white
-printf("2\n");				
+		subtract_background(i_image, buf0, Nx, Ny, sgm_Gauss); // Using FFT to remove the slowly varying background
+		dump_fits(Nx, Ny, 1, buf0, "image.fits");
 		
 		crop_and_rebin(i_image, buf0, &Nx, &Ny, &Npix, &h_image);  // allocates h_image on first call
 
-printf("3\n");				
 		
 		// x is for the rows, y is for columns
 		// Assuming pitch will be the same for all images
 		ERR( cudaMallocPitch(&d_image[i_image], &pitch, (size_t)(Ny*sizeof(float)), Nx) )
-printf("4\n");				
+printf("Nx=%d Ny=%d pitch=%d\n", Nx, Ny, (int)(pitch/sizeof(float)));
 		
 		// cudaDeviceSynchronize();  // Not necessary, as the prior cudaMalloc will block until cudaMemcpyAsync finishes
+		
+		// At this point, the prior image (i_image-1) has been copied to the GPU; we can process it
+		// Blurring the image to reduce the noise:
+//		gauss_blur_cuda(Nx, Ny, d_image[i_image-1], d_img1, sgm_Gauss); 
+		// Blurring the image to recover the background:
+//		gauss_blur_cuda(Nx, Ny, d_image[i_image-1], d_img2, 5*sgm_Gauss); 
+		// Subtracting the two images to get rid of the background: img1-img2->d_image
+//		subtract_images_cuda(Nx, Ny, d_img1, d_img2, d_image[i_image-1]);
 		
 		// The memcopy command is asynchronous, and will run concurrently with the next host operations - 
 		// reading the next image, and preprocessing it
@@ -103,6 +118,8 @@ printf("4\n");
 
 	free(buf0);
 	ERR( cudaFreeHost(h_image) )
+	ERR( cudaFree(d_img1) )
+	ERR( cudaFree(d_img2) )
 
 	return 0;
 }

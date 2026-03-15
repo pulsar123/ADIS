@@ -42,9 +42,11 @@ void init_all_locks()
 }
 #endif
 
+/* ------------------------------------------------ */
+
 
 void fft_image(int Nx, int Ny,
-                double *img0,
+                float *img0,
                 fftw_complex *F0)
 {
     fftw_complex *in = fftw_malloc(sizeof(fftw_complex)*Nx*Ny);
@@ -236,7 +238,7 @@ void fft_kernel(int Nx, int Ny,
 void convolve_image(int Nx, int Ny,
                     fftw_complex *F0,
                     fftw_complex *K,
-                    double *out)
+                    float *out)
 {
     fftw_complex *Fout = fftw_malloc(sizeof(fftw_complex)*Nx*Ny);
 
@@ -283,7 +285,7 @@ void convolve_image(int Nx, int Ny,
 
 void fft_images_padded(int Nx, int Ny,
                        int Px, int Py,
-                       double *img0,
+                       float *img0,
                        fftw_complex *F0,
 					   int Pad)					  
 {
@@ -291,7 +293,7 @@ void fft_images_padded(int Nx, int Ny,
 	
     int P = Px * Py;
 
-    double *p0 = calloc(P, sizeof(double));
+    float *p0 = calloc(P, sizeof(double));
 
     /* zero-fill */
     for (int i = 0; i < Px*Py; i++)
@@ -342,8 +344,8 @@ void fft_images_padded(int Nx, int Ny,
 
 void crop_image_centered(int Nx, int Ny,
                          int Px, int Py,
-                         double *padded,
-                         double *out)
+                         float *padded,
+                         float *out)
 {
     int x0 = Px/2 - Nx/2;
     int y0 = Py/2 - Ny/2;
@@ -370,7 +372,7 @@ void fits_error(int status)
 /* ------------------------------------------------ */
 
 
-void sigma_clipping(double *image, long plane_pixels, double Nsigma, double *p0, double *sgm, long *Npix, int *k)
+void sigma_clipping(float *image, long plane_pixels, double Nsigma, double *p0, double *sgm, long *Npix, int *k)
 // Doing sigma-cliipping for the input monochrome image. Outputs: offset p0, std sgm, number of good pixels Npix.
 {
   *p0 = 0.0;
@@ -416,7 +418,7 @@ void sigma_clipping(double *image, long plane_pixels, double Nsigma, double *p0,
 
 /* ------------------------------------------------ */
 
-  double scaling (double *image1, double *master, long plane_pixels, double p1_low, int *k)
+  float scaling (float *image1, float *master, long plane_pixels, double p1_low, int *k)
   {
 	  // Computing the scaling between the convolved master image and the individual image1.
 	  // Both images need their bias removed in advance
@@ -491,13 +493,14 @@ void sigma_clipping(double *image, long plane_pixels, double Nsigma, double *p0,
 
 /* ------------------------------------------------ */
 
-	void gauss_blur(int Nx, int Ny, double* img, double sgm)
+	void gauss_blur(int Nx, int Ny, float* img, float *img_out, float sgm)
 	// Applying gaussian blur to img, with sgm radius
+	// I need padding!
 	{
 		long N = Nx * Ny;
 		
 		// Fill an image with a Gaussian:
-		double *G = malloc(sizeof(double) * N);
+		float *G = malloc(sizeof(float) * N);
 		double sum = 0.0;
 		double sgm2 = sgm*sgm;
 		for (int x=0; x<Nx; x++)
@@ -540,3 +543,23 @@ void sigma_clipping(double *image, long plane_pixels, double Nsigma, double *p0,
 
 /* ------------------------------------------------ */
 
+/*
+	void dump_fits (int Nx, int Ny, float *img, const char *name)
+	// Dump a 2D image into a FITS file (for debugging)
+	{
+		int status; 
+		
+		fitsfile *fk;
+		fits_create_file(&fk, name, &status);
+		fits_error(status);
+		long nelem1  = (long)Nx * Ny * 3;
+		long naxes[3] = {Ny, Nx, 3};
+		fits_create_img(fk, FLOAT_IMG, 3, naxes, &status);
+		fits_error(status);
+		fits_write_img(fk, TFLOAT, 1, nelem1, img, &status);
+		fits_error(status);
+		fits_close_file(fk, &status);		
+		
+		return;
+	}
+*/

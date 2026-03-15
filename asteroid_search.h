@@ -9,7 +9,6 @@
 #ifndef ASTEROID_SEARCH_H
   #define ASTEROID_SEARCH_H
   #include "cuda_errors.h"
-#endif
 
 #ifdef _OPENMP
   // OpenMP is enabled
@@ -17,7 +16,7 @@
 #endif
 
 
-void fits_error(int status);
+//void fits_error(int status);
 
 void Is_GPU_present();
 
@@ -27,3 +26,7 @@ void image_bw(float *image, long Npix, int Nc);
 
 void crop_and_rebin(int i_image, float *buf0, int *Nx, int *Ny, long *Npix, float** h_image);
 
+void subtract_background(int i_image, float *img, int Nx, int Ny, float sgm);
+
+
+#endif

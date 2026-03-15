@@ -1,3 +1,7 @@
+#ifndef RECONV_H
+#define RECONV_H
+
+
 #include <sys/time.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,12 +16,14 @@
 
 #define IDX(x,y,Ny) ((x)*(Ny) + (y))
 
-
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 void fits_error(int status);
 
 void fft_image(int Nx, int Ny,
-                double *img0,
+                float *img0,
                 fftw_complex *F0);
 
 void derive_kernel_ft(int N, fftw_complex *F1,
@@ -44,34 +50,41 @@ void fft_kernel(int Nx, int Ny,
 void convolve_image(int Nx, int Ny,
                     fftw_complex *F0,
                     fftw_complex *K,
-                    double *out);
+                    float *out);
 
 void fft_images_padded(int Nx, int Ny,
                        int Px, int Py,
-                       double *img0,
+                       float *img0,
                        fftw_complex *F0,
 					   int Pad);
 
 void crop_image_centered(int Nx, int Ny,
                          int Px, int Py,
-                         double *padded,
-                         double *out);
+                         float *padded,
+                         float *out);
 
-void sigma_clipping(double *image, long plane_pixels, double Nsigma, double *p0, double *sgm, long *Npix, int *k);
+void sigma_clipping(float *image, long plane_pixels, double Nsigma, double *p0, double *sgm, long *Npix, int *k);
 
-double scaling (double *image1, double *master, long plane_pixels, double p1_low, int *k);
+float scaling (float *image1, float *master, long plane_pixels, double p1_low, int *k);
 
-void gauss_blur(int Nx, int Ny, double* img, double sgm);
+void gauss_blur(int Nx, int Ny, float* img, float *img_out, float sgm);
 
 int timeval_subtract (double *result, struct timeval *x, struct timeval *y);
+
+void dump_fits (int Nx, int Ny, int Nc, float *img, const char *name);
+
 
 #ifdef _OPENMP
 void init_all_locks();
 #endif	
 
-#ifndef MYMAIN_H
-  #define MYMAIN_H
-  extern int verbose;
+//#ifndef MYMAIN_H
+//  #define MYMAIN_H
+//  extern int verbose;
+//#endif
+
+#ifdef __cplusplus
+}
 #endif
 
-
+#endif

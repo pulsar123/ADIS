@@ -254,18 +254,18 @@ int main(int argc, char **argv)
 
     gettimeofday (&tdr0, NULL);  
 
-    double *img0 = malloc(sizeof(double) * plane_pixels * NOMP);
-    double *img1 = malloc(sizeof(double) * plane_pixels * NOMP);
+    float *img0 = malloc(sizeof(float) * plane_pixels * NOMP);
+    float *img1 = malloc(sizeof(float) * plane_pixels * NOMP);
 
     fftw_complex *F0 = fftw_malloc(sizeof(fftw_complex)*P * NOMP);
     fftw_complex *F1 = fftw_malloc(sizeof(fftw_complex)*P * NOMP);
     fftw_complex *K  = fftw_malloc(sizeof(fftw_complex)*P * NOMP);
     fftw_complex *k_spatial = fftw_malloc(sizeof(fftw_complex)*P * NOMP);
 
-    double *img = malloc(sizeof(double) * plane_pixels * NOMP);
+    float *img = malloc(sizeof(float) * plane_pixels * NOMP);
     fftw_complex *F = fftw_malloc(sizeof(fftw_complex)*P * NOMP);
-    double *padded_out = malloc(sizeof(double)*P * NOMP);
-    double *cropped = malloc(sizeof(double)*plane_pixels * NOMP);
+    float *padded_out = malloc(sizeof(float)*P * NOMP);
+    float *cropped = malloc(sizeof(float)*plane_pixels * NOMP);
 
     float *outbuf = malloc(sizeof(float) * plane_pixels * Nc);
 	float *kernel = NULL;
@@ -427,16 +427,7 @@ int main(int argc, char **argv)
 	
 	if (dump_kernel)
 	{
-		fitsfile *fk;
-		fits_create_file(&fk, fkernel, &status);
-		fits_error(status);
-		long nelem1  = (long)Px * Py * 3;
-		long naxes[3] = {Py, Px, 3};
-		fits_create_img(fk, FLOAT_IMG, 3, naxes, &status);
-		fits_error(status);
-		fits_write_img(fk, TFLOAT, 1, nelem1, kernel, &status);
-		fits_error(status);
-		fits_close_file(fk, &status);
+		dump_fits(Px, Py, kernel, fkernel);
 	}
 
 	long fpixel = 1;

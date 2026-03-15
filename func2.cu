@@ -1,30 +1,5 @@
+#include "reconv.h"
 #include "asteroid_search.h"
-
-int timeval_subtract (double *result, struct timeval *x, struct timeval *y)
-{
-  struct timeval result0;
-
-  /* Perform the carry for the later subtraction by updating y. */
-  if (x->tv_usec < y->tv_usec) {
-    int nsec = (y->tv_usec - x->tv_usec) / 1000000 + 1;
-    y->tv_usec -= 1000000 * nsec;
-    y->tv_sec += nsec;
-  }
-  if (x->tv_usec - y->tv_usec > 1000000) {
-    int nsec = (y->tv_usec - x->tv_usec) / 1000000;
-    y->tv_usec += 1000000 * nsec;
-    y->tv_sec -= nsec;
-  }
-
-  /* Compute the time remaining to wait.
-     tv_usec is certainly positive. */
-  result0.tv_sec = x->tv_sec - y->tv_sec;
-  result0.tv_usec = x->tv_usec - y->tv_usec;
-  *result = ((double)result0.tv_usec)/1e6 + (double)result0.tv_sec;
-
-  /* Return 1 if result is negative. */
-  return x->tv_sec < y->tv_sec;
-}
 
 
 void Is_GPU_present()
@@ -54,6 +29,7 @@ void Is_GPU_present()
 
 
 /* ------------------------------------------------ */
+/*
 void fits_error(int status)
 {
     if (status) {
@@ -61,7 +37,7 @@ void fits_error(int status)
         exit(EXIT_FAILURE);
     }
 }
-
+*/
 /* ------------------------------------------------ */
 
 void image_bw(float *image, long Npix, int Nc)
@@ -84,14 +60,76 @@ void crop_and_rebin(int i_image, float *buf0, int *Nx, int *Ny, long *Npix, floa
 		// We use cudaMallocHost instead of malloc to put the array in the pinned host memory
 		ERR( cudaMallocHost((void**)h_image, sizeof(float)* *Npix) )
 	}
-printf("5\n");	
+	
 	for (long i=0; i<*Npix; i++)
 	{
 		(*h_image)[i] = buf0[i];
-//printf("%d %f\n",i,buf0[i]);
 	}
 	
 	return;
 	
 }
 /* ------------------------------------------------ */
+
+	void subtract_background(int i_image, float *img, int Nx, int Ny, float sgm)
+	{
+	if (i_image == 0)
+	{
+
+	}
+
+		long N = Nx * Ny;		
+		float *img_bkg = (float *)malloc(sizeof(float) * N);
+
+//		gauss_blur(Nx, Ny, img, img, 5*sgm); // background
+
+	
+		gauss_blur(Nx, Ny, img, img_bkg, 5*sgm); // background
+		gauss_blur(Nx, Ny, img, img, sgm); // image with noise blurred
+		
+		// Subtracting the background from the image:
+		for (long i=0; i<N; i++)
+			img[i] = img[i] - img_bkg[i];
+	
+	
+		free(img_bkg);
+	}
+
+/* ------------------------------------------------ */
+
+
+/*
+	void gauss_blur_cuda(int i_image, int Nx, int Ny, float* img_in, float* img_out, float sgm)
+	{
+	if (i_image == 0)
+	{
+//		cufftPlan2D()
+	}
+		
+		// cufftExecR2C() 
+		
+	}
+	*/
+	
+	
+	void dump_fits (int Nx, int Ny, int Nc, float *img, const char *name)
+	// Dump a 2D image into a FITS file (for debugging)
+	{
+		int status=0; 
+		
+		fitsfile *fk;
+		fits_create_file(&fk, name, &status);
+		fits_error(status);
+		long nelem1  = (long)Nx * Ny * Nc;
+//		long naxes[3] = {Ny, Nx, Nc};
+//		fits_create_img(fk, FLOAT_IMG, 3, naxes, &status);
+		long naxes[2] = {Ny, Nx};
+		fits_create_img(fk, FLOAT_IMG, 2, naxes, &status);
+		fits_error(status);
+		fits_write_img(fk, TFLOAT, 1, nelem1, img, &status);
+		fits_error(status);
+		fits_close_file(fk, &status);		
+		
+		return;
+	}
+	
