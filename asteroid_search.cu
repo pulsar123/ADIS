@@ -43,6 +43,7 @@ int main(int argc, char **argv)
 	float *h_image = NULL;
 	
 	float sgm_Gauss = FWHM / sqrt(8*log(2.0));
+	printf("sgm_Gauss = %f\n", sgm_Gauss);
 	
 	// Reading input FITS images one by one, using cudaMemcpyAsync to do concurrent copying to the GPU
 	for (int i_image=0; i_image<N_images; i_image++)
@@ -89,7 +90,12 @@ int main(int argc, char **argv)
 		fits_error(status);
 		fits_close_file(f0, &status);		
 		image_bw(buf0, Npix, Nc);  // Turn the image into black and white
-		subtract_background(i_image, buf0, Nx, Ny, sgm_Gauss); // Using FFT to remove the slowly varying background
+		// crop(buf0, &Nxy, &Ny);
+		// Background model has these many tiles along each dimension:
+		int NTx = 5;
+		int NTy = (int)((float)NTx / (float)Nx * (float)Ny + 0.5);
+		printf("Background model: %d x %d tiles, %d x %d pixels each\n", NTy, NTx, Ny/NTy, Nx/NTx);
+		subtract_background(i_image, buf0, Nx, Ny, NTx, NTy);
 		dump_fits(Nx, Ny, 1, buf0, "image.fits");
 		
 		crop_and_rebin(i_image, buf0, &Nx, &Ny, &Npix, &h_image);  // allocates h_image on first call

@@ -26,7 +26,7 @@ void image_bw(float *image, long Npix, int Nc);
 
 void crop_and_rebin(int i_image, float *buf0, int *Nx, int *Ny, long *Npix, float** h_image);
 
-void subtract_background(int i_image, float *img, int Nx, int Ny, float sgm);
+void subtract_background(int i_image, float *img, int Nx, int Ny, int NTx, int NTy);
 
 
 #endif
