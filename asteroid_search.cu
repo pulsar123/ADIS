@@ -89,8 +89,12 @@ int main(int argc, char **argv)
 		fits_read_img(f0, TFLOAT, 1, Npix * Nc, NULL, buf0, NULL, &status);
 		fits_error(status);
 		fits_close_file(f0, &status);		
+
 		image_bw(buf0, Npix, Nc);  // Turn the image into black and white
-		// crop(buf0, &Nxy, &Ny);
+
+		float crop_fraction = 0.99;
+		crop(buf0, &Nx, &Ny, &Npix, crop_fraction);
+
 		// Background model has these many tiles along each dimension:
 		int NTx = 5;
 		int NTy = (int)((float)NTx / (float)Nx * (float)Ny + 0.5);
@@ -98,25 +102,17 @@ int main(int argc, char **argv)
 		subtract_background(i_image, buf0, Nx, Ny, NTx, NTy);
 		dump_fits(Nx, Ny, 1, buf0, "image.fits");
 		
-		crop_and_rebin(i_image, buf0, &Nx, &Ny, &Npix, &h_image);  // allocates h_image on first call
-
+		rebin(i_image, buf0, &Nx, &Ny, &Npix, &h_image);  // allocates h_image on first call
 		
 		// x is for the rows, y is for columns
 		// Assuming pitch will be the same for all images
 		ERR( cudaMallocPitch(&d_image[i_image], &pitch, (size_t)(Ny*sizeof(float)), Nx) )
-printf("Nx=%d Ny=%d pitch=%d\n", Nx, Ny, (int)(pitch/sizeof(float)));
+		printf("Nx=%d Ny=%d pitch=%d\n", Nx, Ny, (int)(pitch/sizeof(float)));
 		
 		// cudaDeviceSynchronize();  // Not necessary, as the prior cudaMalloc will block until cudaMemcpyAsync finishes
-		
 		// At this point, the prior image (i_image-1) has been copied to the GPU; we can process it
-		// Blurring the image to reduce the noise:
-//		gauss_blur_cuda(Nx, Ny, d_image[i_image-1], d_img1, sgm_Gauss); 
-		// Blurring the image to recover the background:
-//		gauss_blur_cuda(Nx, Ny, d_image[i_image-1], d_img2, 5*sgm_Gauss); 
-		// Subtracting the two images to get rid of the background: img1-img2->d_image
-//		subtract_images_cuda(Nx, Ny, d_img1, d_img2, d_image[i_image-1]);
 		
-		// The memcopy command is asynchronous, and will run concurrently with the next host operations - 
+		// The memcopy command is asynchronous, and will run concurrently with the next host operation - 
 		// reading the next image, and preprocessing it
 		ERR( cudaMemcpyAsync(d_image[i_image], h_image, Npix*sizeof(float), cudaMemcpyHostToDevice) )
 		

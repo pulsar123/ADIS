@@ -53,7 +53,40 @@ void image_bw(float *image, long Npix, int Nc)
 /* ------------------------------------------------ */
 
 
-void crop_and_rebin(int i_image, float *buf0, int *Nx, int *Ny, long *Npix, float** h_image)
+void crop(float *img, int *Nx, int *Ny, long *Npix, float crop_fraction)
+{
+	if (crop_fraction <= 0.0 || crop_fraction >= 1.0)
+		return;
+		
+	// width of the crop area:
+	int dx = int(*Nx*(1.0-crop_fraction)/2.0+0.5);
+	int dy = int(*Ny*(1.0-crop_fraction)/2.0+0.5);
+	printf("Crop width: %d x %d\n", dy, dx);
+	
+	if (dx==0 && dy==0)
+		return;
+	
+	for (int ix=dx; ix<*Nx-dx; ix++)
+		for (int iy=dy; iy<*Ny-dy; iy++)
+		{
+			long i_old = ix* *Ny + iy;
+			long i_new = (ix-dx)* (*Ny-2*dy) + iy-dy;
+			img[i_new] = img[i_old];
+		}
+		
+	*Nx = *Nx - 2*dx;
+	*Ny = *Ny - 2*dy;
+	*Npix = *Nx * *Ny;
+	
+	return;
+}
+
+
+
+/* ------------------------------------------------ */
+
+
+void rebin(int i_image, float *buf0, int *Nx, int *Ny, long *Npix, float** h_image)
 {
 	if (i_image == 0)
 	{
@@ -132,21 +165,22 @@ void crop_and_rebin(int i_image, float *buf0, int *Nx, int *Ny, long *Npix, floa
 				int jy2 = (int)(iy*delta_y+0.5);
 				
 				// 3-sigma clipping to compute the background level for the current tile ix,iy:
-				float p0 = 0.0;
-				float sgm = 1e12;
+				double p0 = 0.0;
+				double sgm = 1e12;
 				long Npix = -1;
 				long Npix_old = -2;
+//				printf("ix=%d, iy=%d\n", ix, iy);
 				while (Npix != Npix_old)
 					{
 						Npix_old = Npix;
-						float sum = 0.0;
-						float sum2 = 0.0;
+						double sum = 0.0;
+						double sum2 = 0.0;
 						Npix = 0;
 						// Cycling through all the pixels in the current tile:
 						for (int jx=jx1; jx<jx2; jx++)
 							for (int jy=jy1; jy<jy2; jy++)
 								{
-									float p = img[jx*Ny + jy];
+									double p = img[jx*Ny + jy];
 									if (fabs(p - p0) < 3*sgm)
 										{
 											sum += p;
@@ -156,6 +190,8 @@ void crop_and_rebin(int i_image, float *buf0, int *Nx, int *Ny, long *Npix, floa
 								}
 						p0 = sum / Npix;
 						sgm = sqrt(sum2 / Npix - p0 * p0);	
+//						if (ix==4 && iy==9)
+//							printf("%d, %e, %e\n",Npix, p0, sgm);
 					}  //while loop
 					
 				B[ix*(NTy+2) + iy] = p0; // Memorizing the tile's background level
@@ -192,7 +228,7 @@ void crop_and_rebin(int i_image, float *buf0, int *Nx, int *Ny, long *Npix, floa
 		ix1 = NTx; iy1 = NTy; i1 = ix1*(NTy+2) + iy1;
 		B[i0] = B[i1];
 		
-/*
+/*  Printing the background matrix
 		for (int ix=0; ix<NTx+2; ix++)
 		{
 			for (int iy=0; iy<NTy+2; iy++)
@@ -234,42 +270,12 @@ void crop_and_rebin(int i_image, float *buf0, int *Nx, int *Ny, long *Npix, floa
 			}
 		}
 		
-
-//		long N = Nx * Ny;		
-/*
-		float *img_bkg = (float *)malloc(sizeof(float) * N);
-
-
-		gauss_blur(Nx, Ny, img, img_bkg, 5*sgm); // background
-		gauss_blur(Nx, Ny, img, img, sgm); // image with noise blurred
-		
-		// Subtracting the background from the image:
-		for (long i=0; i<N; i++)
-			img[i] = img[i] - img_bkg[i];
-	
-		free(img_bkg);
-		*/
-//		gauss_blur(Nx, Ny, img, img, sgm, 0.0); // image with noise blurred
-//		highpass_filter(img,img,Nx,Ny,0.01);
 		
 	}
 
 /* ------------------------------------------------ */
 
 
-/*
-	void gauss_blur_cuda(int i_image, int Nx, int Ny, float* img_in, float* img_out, float sgm)
-	{
-	if (i_image == 0)
-	{
-//		cufftPlan2D()
-	}
-		
-		// cufftExecR2C() 
-		
-	}
-	*/
-	
 	
 	void dump_fits (int Nx, int Ny, int Nc, float *img, const char *name)
 	// Dump a 2D image into a FITS file (for debugging)
