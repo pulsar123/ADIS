@@ -30,5 +30,6 @@ void rebin(int i_image, float *buf0, int *Nx, int *Ny, long *Npix, float** h_ima
 
 void subtract_background(int i_image, float *img, int Nx, int Ny, int NTx, int NTy);
 
+int date2mjd (int yr, int mn, int dy);
 
 #endif
