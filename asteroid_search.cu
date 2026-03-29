@@ -147,10 +147,11 @@ int main(int argc, char **argv)
 	// Number of base tiles along both axes (no incomplete tiles are allowed):
 	int Nxb = Nx/NB;
 	int Nyb = Ny/NB;
-	// Tile (Ixb,Iyb) covers this range of pixels: ix=NB*Ixb..NB*(Ixb+1)-1, iy=NB*Iyb..NB*(Iyb+1)-1 
+	// Base tile (Ixb,Iyb) covers this range of pixels (inclusive): ix=NB*Ixb..NB*(Ixb+1)-1, iy=NB*Iyb..NB*(Iyb+1)-1 
 	
-	// End of motion vectors are quantized using this step in pixels:
+	// End of motion vectors are quantized using this step in FWHM units:
 	float Step = 0.5;
+	// The step (Motion Quantum) in pixels:
 	float MQ = Step * FWHM; // The multipler Step should be provided as a command line argument
 	
 	// The motion vector space is between radii RMIN and RMAX (both are in MQ units)
@@ -162,7 +163,7 @@ int main(int argc, char **argv)
 	if (RMAX > diag)
 		RMAX = diag;
 	
-	// Minimum pixel brightness (in global std units) to qualifyr for a detection
+	// Minimum pixel brightness (in global std units) to qualify for a detection
 	// Should be input parameter:
 	float p_min = 5.0;
 	
@@ -175,22 +176,30 @@ int main(int argc, char **argv)
 			float R = sqrt(float(Jx*Jx + Jy*Jy));
 			if (R > RMIN && R <= RMAX)
 			{
-				// I and J use different units!!!  I: 31 pixels; J: MQ pixels
-				// Full range of base tiles (Ix2,Iy2 are excluded):
-				int Ix1 = 0;
-				int Iy1 = 0;
-				int Ix2 = Nxb;
-				int Iy2 = Nyb;
-				// Possible range of base tile indexes when the whole image sequence would be
-				// usable, for the given motion vector Jx,Jy:
-				if (Jx < 0)
-					Ix1 = Ix1 - Jx;
+				// Motion vector in pixels:
+				float jx = Jx*MQ;
+				float jy = Jy*MQ;
+				
+				// Maximum range of base image pixels usable for this motion vector:
+				// ix_min...ix_max, iy_min...iy_max (inclusive)
+				int ix_min = 0;
+				int ix_max = Nx - 1;
+				int iy_min = 0;
+				int iy_max = Ny - 1;
+				if (jx < 0)
+					ix_min = ceil(-jx);
 				else
-					Ix2 = Ix2 - Jx;
-				if (Jy < 0)
-					Iy1 = Iy1 - Jy;
+					ix_max = ceil(jx);
+				if (jy < 0)
+					iy_min = ceil(-jy);
 				else
-					Iy2 = Iy2 - Jy;
+					iy_max = ceil(jy);
+				
+				// Now we can get the ranges for the base tile indexes (inclusive):
+				int Ix1 = ix_min / NB;
+				int Ix2 = (ix_max-NB+1) / NB;
+				int Iy1 = iy_min / NB;
+				int Iy2 = (iy_max-NB+1) / NB;
 				
 				// The grid of blocks is for Ix and Iy parameters:
 				dim3 Grid_size(Ix2-Ix1+1, Iy2-Iy1+1);
