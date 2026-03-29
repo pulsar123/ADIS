@@ -109,6 +109,8 @@ void rebin(int i_image, float *buf0, int *Nx, int *Ny, long *Npix, float** h_ima
 	using bilinear interpolation. Within each tile, the background level is estimated using
 	3-sigma clipping algorithm.
 	
+	We also normalize the brightness values by the global (averaged over all tiles) background std value.
+	
 	The background array G has the dimensions NTx+2 x NTy+2 (extra border tiles on all 4 sides,
 	to make bilinear interpolation seamless).
 	
@@ -152,6 +154,10 @@ void rebin(int i_image, float *buf0, int *Nx, int *Ny, long *Npix, float** h_ima
 		delta_y = (float)Ny / (float)NTy;
 	}
 
+	double sum_all = 0.0;
+	double sum2_all = 0.0;
+	long Npix_all = 0;
+
 	// Computing background value for each tile using 3-sigma clipping
 	// Border regions: ix=0, ix=NTx+1; iy=0, iy=NTy+1
 	for (int ix=1; ix<NTx+1; ix++)
@@ -190,10 +196,12 @@ void rebin(int i_image, float *buf0, int *Nx, int *Ny, long *Npix, float** h_ima
 								}
 						p0 = sum / Npix;
 						sgm = sqrt(sum2 / Npix - p0 * p0);	
-//						if (ix==4 && iy==9)
-//							printf("%d, %e, %e\n",Npix, p0, sgm);
 					}  //while loop
 					
+				sum_all = sum_all + sum;
+				sum2_all = sum2_all + sum2;
+				Npix_all = Npix_all + Npix;
+				
 				B[ix*(NTy+2) + iy] = p0; // Memorizing the tile's background level
 				
 				// Filling out the border regions:
@@ -239,6 +247,10 @@ void rebin(int i_image, float *buf0, int *Nx, int *Ny, long *Npix, float** h_ima
 		}
 */		
 
+		// Global (computed over all the tiles) bias and std:
+		double p0_all = sum_all / Npix_all;
+		double sgm_all = sqrt(sum2_all / Npix_all - p0_all * p0_all);	
+
 		// Subtracting the background
 		// (Bilinear interpolation model for background)
 		for (int jx=0; jx<Nx; jx++)
@@ -265,12 +277,13 @@ void rebin(int i_image, float *buf0, int *Nx, int *Ny, long *Npix, float** h_ima
 				// background value corresponding to the current pixel jx,jy
 				float Bp = float(jy-jy0)/float(jy1-jy0) * (B1-B0) + B0;
 				
-				// Subtracting the bilinear interpolated value of the background:
-				img[jx*Ny+jy] = img[jx*Ny+jy] - Bp;				
+				// Subtracting the bilinear interpolated value of the background,
+				// and normalzing it by sgm_all:
+				img[jx*Ny+jy] = (img[jx*Ny+jy] - Bp) / sgm_all;
 			}
 		}
 		
-		
+		return;
 	}
 
 /* ------------------------------------------------ */
@@ -314,4 +327,25 @@ int date2mjd (int yr, int mn, int dy) {
 
   return(rv);
 }
+	
+	
+/* ------------------------------------------------ */
+	
+__global__ void motion_search_cuda (int Ix1, int Iy1, int Jx, int Jy, float MQ, float p_min)
+{
+	// The main compute kernel: searches for moving objects over all images,
+	// all allowed base image tiles, for the given motion vector (Jx,Jy) in MQ units
+	// Using the maximum 1024 threads per block, to cover 32x32 pixel tiles
+	
+	
+	
+	
+	return;
+}
+
+
+
+
+/* ------------------------------------------------ */
+
 	

@@ -32,4 +32,6 @@ void subtract_background(int i_image, float *img, int Nx, int Ny, int NTx, int N
 
 int date2mjd (int yr, int mn, int dy);
 
+__global__ void motion_search_cuda (float **d_image, int N_images, int Ix1, int Iy1, int Jx, int Jy, float MQ, float p_min);
+
 #endif
