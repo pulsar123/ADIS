@@ -46,10 +46,10 @@ int main(int argc, char **argv)
 	float **d_image = NULL;
 	ERR( cudaMallocHost(&d_image, N_images*sizeof(float*)) )
 	float *h_image = NULL;
-	double *h_dt = NULL;
-	ERR( cudaMallocHost(&h_dt, N_images*sizeof(double*)) )
-	double *d_dt = NULL;
-	ERR( cudaMalloc(&d_dt, N_images*sizeof(double*)) )
+	float *h_dt = NULL;
+	ERR( cudaMallocHost(&h_dt, N_images*sizeof(float*)) )
+	float *d_dt = NULL;
+	ERR( cudaMalloc(&d_dt, N_images*sizeof(float*)) )
 	
 	float sgm_Gauss = FWHM / sqrt(8*log(2.0));
 	printf("sgm_Gauss = %f\n", sgm_Gauss);
@@ -140,37 +140,46 @@ int main(int argc, char **argv)
 	// Normalizing the time shift for the last image to 1:
 	for (int i=0; i<N_images; i++)
 		h_dt[i] = h_dt[i]/h_dt[N_images-1];
-	ERR( cudaMemcpy(d_dt, h_dt, N_images*sizeof(double), cudaMemcpyHostToDevice) )
+	ERR( cudaMemcpy(d_dt, h_dt, N_images*sizeof(float), cudaMemcpyHostToDevice) )
 	
-	// Base tiles have NBxNB pixels size:
-	int NB = 31;
 	// Number of base tiles along both axes (no incomplete tiles are allowed):
 	int Nxb = Nx/NB;
 	int Nyb = Ny/NB;
 	// Base tile (Ixb,Iyb) covers this range of pixels (inclusive): ix=NB*Ixb..NB*(Ixb+1)-1, iy=NB*Iyb..NB*(Iyb+1)-1 
 	
-	// End of motion vectors are quantized using this step in FWHM units:
+	// End of motion vectors are quantized on a mesh with this step in FWHM units:
+	// The multipler Step should be provided as a command line argument
 	float Step = 0.5;
-	// The step (Motion Quantum) in pixels:
-	float MQ = Step * FWHM; // The multipler Step should be provided as a command line argument
+	// The mesh step (Motion Quantum) in pixels:
+	float MQ = Step * FWHM; 
 	
 	// The motion vector space is between radii RMIN and RMAX (both are in MQ units)
-	// RMIN and RMX should come as command line arguments
+	// RMIN and RMAX should come as command line arguments
 	int RMIN = 10;
 	int RMAX = 20;
 	// RMAX is limited by the image diagonal length (distance between the farthest tiles):
 	int diag = floor(NB * sqrt(pow(Nxb-1,2) + pow(Nyb-1,2)) / MQ);
 	if (RMAX > diag)
 		RMAX = diag;
+	if (RMAX < 0)
+		RMAX = 0;
+	if (RMIN < 0)
+		RMIN = 0;
 	
-	// Minimum pixel brightness (in global std units) to qualify for a detection
+	// Minimum pixel brightness (in master image std units) to qualify for a detection
 	// Should be input parameter:
-	float p_min = 5.0;
+	float p_min_std = 5.0;
+	
+	// Master image std (should come from FITS headers, or command line)
+	float std_master = 1e-4;
+	
+	// Signal detection theshold for image stacks (assuming summation stacking):
+	float p_min = p_min_std * std_master * N_images;
 	
 	// Double loop going over all possible motion vectors:
 	// Jx, Jy are in MQ units
-	for (int Jx=-RMAX; Jx>=RMAX; Jx++)
-		for (int Jy=-RMAX; Jy>=RMAX; Jy++)
+	for (int Jx=-RMAX; Jx<=RMAX; Jx++)
+		for (int Jy=-RMAX; Jy<=RMAX; Jy++)
 		{
 			// Length of the motion vector in MQ units:
 			float R = sqrt(float(Jx*Jx + Jy*Jy));
@@ -195,7 +204,8 @@ int main(int argc, char **argv)
 				else
 					iy_max = ceil(jy);
 				
-				// Now we can get the ranges for the base tile indexes (inclusive):
+				// Now we can get the ranges for the base tile indexes (inclusive),
+				// corresponding to the current motion vector:
 				int Ix1 = ix_min / NB;
 				int Ix2 = (ix_max-NB+1) / NB;
 				int Iy1 = iy_min / NB;
@@ -207,7 +217,8 @@ int main(int argc, char **argv)
 				// The main compute kernel: searches for moving objects over all images,
 				// all allowed base image tiles, for the given motion vector (Jx,Jy) in MQ units
 				// Using the maximum 1024 threads per block, to cover 32x32 pixel tiles
-				motion_search_cuda <<<Grid_size, 1024>>> (d_image,N_images,Ix1,Iy1,Jx,Jy,MQ,p_min);								
+				dim3 Block_size(32,32);
+				motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,Jx,Jy,MQ,p_min,d_dt);								
 			}			
 		}
 

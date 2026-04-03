@@ -108,9 +108,7 @@ void rebin(int i_image, float *buf0, int *Nx, int *Ny, long *Npix, float** h_ima
 	/*  Subtracting background from an image defined on NTx x NTy tiles (not exactly square), 
 	using bilinear interpolation. Within each tile, the background level is estimated using
 	3-sigma clipping algorithm.
-	
-	We also normalize the brightness values by the global (averaged over all tiles) background std value.
-	
+		
 	The background array G has the dimensions NTx+2 x NTy+2 (extra border tiles on all 4 sides,
 	to make bilinear interpolation seamless).
 	
@@ -157,6 +155,7 @@ void rebin(int i_image, float *buf0, int *Nx, int *Ny, long *Npix, float** h_ima
 	double sum_all = 0.0;
 	double sum2_all = 0.0;
 	long Npix_all = 0;
+	double sum, sum2;
 
 	// Computing background value for each tile using 3-sigma clipping
 	// Border regions: ix=0, ix=NTx+1; iy=0, iy=NTy+1
@@ -175,12 +174,11 @@ void rebin(int i_image, float *buf0, int *Nx, int *Ny, long *Npix, float** h_ima
 				double sgm = 1e12;
 				long Npix = -1;
 				long Npix_old = -2;
-//				printf("ix=%d, iy=%d\n", ix, iy);
 				while (Npix != Npix_old)
 					{
 						Npix_old = Npix;
-						double sum = 0.0;
-						double sum2 = 0.0;
+						sum = 0.0;
+						sum2 = 0.0;
 						Npix = 0;
 						// Cycling through all the pixels in the current tile:
 						for (int jx=jx1; jx<jx2; jx++)
@@ -277,9 +275,8 @@ void rebin(int i_image, float *buf0, int *Nx, int *Ny, long *Npix, float** h_ima
 				// background value corresponding to the current pixel jx,jy
 				float Bp = float(jy-jy0)/float(jy1-jy0) * (B1-B0) + B0;
 				
-				// Subtracting the bilinear interpolated value of the background,
-				// and normalzing it by sgm_all:
-				img[jx*Ny+jy] = (img[jx*Ny+jy] - Bp) / sgm_all;
+				// Subtracting the bilinear interpolated value of the background:
+				img[jx*Ny+jy] = img[jx*Ny+jy] - Bp;
 			}
 		}
 		
@@ -331,12 +328,76 @@ int date2mjd (int yr, int mn, int dy) {
 	
 /* ------------------------------------------------ */
 	
-__global__ void motion_search_cuda (int Ix1, int Iy1, int Jx, int Jy, float MQ, float p_min)
+__global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch, int Ix1, int Iy1, int Jx, int Jy, float MQ, float p_min, float *d_dt)
 {
 	// The main compute kernel: searches for moving objects over all images,
 	// all allowed base image tiles, for the given motion vector (Jx,Jy) in MQ units
 	// Using the maximum 1024 threads per block, to cover 32x32 pixel tiles
+	// Each kernel performs one full image stacking, over all base tiles.
 	
+	__shared__ float base_tile[NB][NB];  // Keeps the base tile pixels
+	__shared__ float image_tile[NB+1][NB+2]; // Keeps tiles of all the rest of images; +1 columns to avoid bank conflicts (last column will not be used)
+	
+	// Base tile indexes:
+	// Change in the interval Ix1..Ix2, Iy1..Iy2 (inclusive)
+	int Ixb = blockIdx.x + Ix1;
+	int Iyb = blockIdx.y + Iy1;
+
+	// Coordinates of the pixels within the tile:
+	int jx = threadIdx.y;
+	int jy = threadIdx.x; // Fastest changing index
+
+	// Base image pixel coordinates:
+	int ix = jx + NB*Ixb;
+	int iy = jy + NB*Iyb;  // Fastest changing index
+	
+	// Loping over all images sequentially:
+	for (int i=0; i<N_images; i++)
+	{
+		__syncthreads(); 		
+
+		// Motion vector for the image i in pixels:
+		float dx = d_dt[i] * Jx*MQ;
+		float dy = d_dt[i] * Jy*MQ;
+		// Pixel coordinates of the base transposed pixel:
+		int ix0 = ix + floor(dx);
+		int iy0 = iy + floor(dy); // Fastest changing index
+		// Fractional pixel shift (>=0):
+		float fdx = dx - floor(dx);
+		float fdy = dy - floor(dy);		
+
+		if (i == 0)
+		// Base tile initialization
+		{
+			// For the base tile only, skipping the last column and last row, because there is no interpolation:
+			if (threadIdx.x==NB || threadIdx.y==NB)
+				continue;
+			
+			// Pointer to the start of the image's row:
+			float *row = (float *)((char*)d_image[i] + ix * pitch);
+			base_tile[jx][jy] = row[iy]; // Coalesced read
+		}
+		else
+		// image_tile initialization
+		{
+			// Pointer to the start of the image's row:
+			float *row = (float *)((char*)d_image[i] + ix0 * pitch);
+			image_tile[jx][jy] = row[iy0]; // Coalesced read
+		}
+		
+		__syncthreads(); // Required because of the tile initialization by all threads ^^
+		
+		if (i > 0 && threadIdx.x<NB && threadIdx.y<NB)
+		// Linear pixel interpolation:
+		{
+			base_tile[jx][jy] += 
+				image_tile[jx][jy]     * (1.0-fdx) * (1.0-fdy) +
+				image_tile[jx][jy+1]   * (1.0-fdx) *      fdy  +
+				image_tile[jx+1][jy]   *      fdx  * (1.0-fdy) +
+				image_tile[jx+1][jy+1] *      fdx  *      fdy ;					
+		}
+		
+	}
 	
 	
 	
