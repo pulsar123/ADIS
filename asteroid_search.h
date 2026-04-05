@@ -23,6 +23,10 @@
 // of pixels in the direction of the motion.
 #define NB 31
 
+// Maximum number of stored brighest pixels
+#define MAX_PIXELS 1000000
+
+__device__ unsigned int Pixel_counter = 0;
 
 //void fits_error(int status);
 
@@ -40,6 +44,6 @@ void subtract_background(int i_image, float *img, int Nx, int Ny, int NTx, int N
 
 int date2mjd (int yr, int mn, int dy);
 
-__global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch, int Ix1, int Iy1, int Jx, int Jy, float MQ, float p_min, float *d_dt);
+__global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch, int Ix1, int Iy1, int Jx, int Jy, float MQ, float p_min, float *d_dt, float *d_test_image);
 
 #endif

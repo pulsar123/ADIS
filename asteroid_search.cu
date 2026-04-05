@@ -19,8 +19,6 @@ int main(int argc, char **argv)
 	long Npix;
 	int Nx, Ny, Nc, Nx0, Ny0;
 	float *buf0; // host
-	float *d_img1; // device
-	float *d_img2; // device
 	size_t pitch;
 	char date_obs[30];
 	double mjd, mjd0;
@@ -43,11 +41,15 @@ int main(int argc, char **argv)
 	
 	int N_images = argc - 1;
 	
+	float **h_image = NULL;
+	h_image = (float **)malloc(N_images*sizeof(float*));
 	float **d_image = NULL;
-	ERR( cudaMallocHost(&d_image, N_images*sizeof(float*)) )
-	float *h_image = NULL;
+	ERR( cudaMalloc(&d_image, N_images*sizeof(float*)) )
+
+	float *h_image1 = NULL;
 	float *h_dt = NULL;
-	ERR( cudaMallocHost(&h_dt, N_images*sizeof(float*)) )
+//	ERR( cudaMallocHost(&h_dt, N_images*sizeof(float*)) )
+	h_dt = (float *)malloc(N_images*sizeof(float*));
 	float *d_dt = NULL;
 	ERR( cudaMalloc(&d_dt, N_images*sizeof(float*)) )
 	
@@ -74,8 +76,7 @@ int main(int argc, char **argv)
 		if (i_image == 0)
 			mjd0 = mjd;
 		h_dt[i_image] = mjd - mjd0; //  in days
-//		printf("DATE-OBS: %s : %lf\n", date_obs, h_dt[i_image]);
-
+		printf("DATE-OBS: %s : %lf\n", date_obs, h_dt[i_image]);
 		
 		fits_get_img_dim(f0, &naxis, &status);
 		fits_get_img_size(f0, 3, naxes, &status);
@@ -122,17 +123,21 @@ int main(int argc, char **argv)
 		subtract_background(i_image, buf0, Nx, Ny, NTx, NTy);
 //		dump_fits(Nx, Ny, 1, buf0, "image.fits");
 		
-		rebin(i_image, buf0, &Nx, &Ny, &Npix, &h_image);  // allocates h_image on first call
+		if (i_image == 0)
+//			ERR( cudaMallocHost(&h_image1, sizeof(float)*Npix) )
+			h_image1 = (float *)malloc(sizeof(float)*Npix);
+		
+		rebin(i_image, buf0, &Nx, &Ny, &Npix, &h_image1);  // allocates h_image on first call
 		
 		// x is for the rows, y is for columns
 		// This is the host-device sync point
-		if (cudaMallocPitch(&d_image[i_image], &pitch, (size_t)(Ny*sizeof(float)), Nx))
+		if (cudaMallocPitch(&h_image[i_image], &pitch, (size_t)(Ny*sizeof(float)), Nx))
 			printf("Error in cudaMallocPitch!\n");
 		printf("Nx=%d Ny=%d pitch=%d\n", Nx, Ny, (int)(pitch/sizeof(float)));
 				
 		// The memcopy command is asynchronous, and will run concurrently with the next host operation - 
 		// reading the next image, and preprocessing it		
-		if (cudaMemcpy2DAsync(d_image[i_image], pitch, h_image, Ny*sizeof(float), Ny*sizeof(float), Nx, cudaMemcpyHostToDevice))
+		if (cudaMemcpy2DAsync(h_image[i_image], pitch, h_image1, Ny*sizeof(float), Ny*sizeof(float), Nx, cudaMemcpyHostToDevice))
 			printf("Error in cudaMemcpy!\n");		
 		
 	} // i_image loop
@@ -140,7 +145,11 @@ int main(int argc, char **argv)
 	// Normalizing the time shift for the last image to 1:
 	for (int i=0; i<N_images; i++)
 		h_dt[i] = h_dt[i]/h_dt[N_images-1];
+//	h_dt[0] = 0.0;
+//	h_dt[1] = 1.0;
+
 	ERR( cudaMemcpy(d_dt, h_dt, N_images*sizeof(float), cudaMemcpyHostToDevice) )
+	ERR( cudaMemcpy(d_image, h_image, N_images*sizeof(float*), cudaMemcpyHostToDevice) )
 	
 	// Number of base tiles along both axes (no incomplete tiles are allowed):
 	int Nxb = Nx/NB;
@@ -155,7 +164,7 @@ int main(int argc, char **argv)
 	
 	// The motion vector space is between radii RMIN and RMAX (both are in MQ units)
 	// RMIN and RMAX should come as command line arguments
-	int RMIN = 10;
+	int RMIN = 20;
 	int RMAX = 20;
 	// RMAX is limited by the image diagonal length (distance between the farthest tiles):
 	int diag = floor(NB * sqrt(pow(Nxb-1,2) + pow(Nyb-1,2)) / MQ);
@@ -175,15 +184,26 @@ int main(int argc, char **argv)
 	
 	// Signal detection theshold for image stacks (assuming summation stacking):
 	float p_min = p_min_std * std_master * N_images;
+
+	float *d_test_image = NULL;
+	ERR( cudaMallocPitch(&d_test_image, &pitch, (size_t)(Ny*sizeof(float)), Nx) )
+	float *h_test_image = NULL;
+//	ERR( cudaMallocHost(&h_test_image, (size_t)(Nx*Ny*sizeof(float))) )
+	h_test_image = (float *)malloc(Npix*sizeof(float));
+
+    gettimeofday (&tdr0, NULL);  
 	
+	int Jcount = 0;
 	// Double loop going over all possible motion vectors:
 	// Jx, Jy are in MQ units
+//	for (int Jx=10; Jx<=10; Jx++)
+//		for (int Jy=10; Jy<=10; Jy++)
 	for (int Jx=-RMAX; Jx<=RMAX; Jx++)
 		for (int Jy=-RMAX; Jy<=RMAX; Jy++)
 		{
 			// Length of the motion vector in MQ units:
 			float R = sqrt(float(Jx*Jx + Jy*Jy));
-			if (R > RMIN && R <= RMAX)
+			if (R >= RMIN && R <= RMAX)
 			{
 				// Motion vector in pixels:
 				float jx = Jx*MQ;
@@ -198,11 +218,11 @@ int main(int argc, char **argv)
 				if (jx < 0)
 					ix_min = ceil(-jx);
 				else
-					ix_max = ceil(jx);
+					ix_max = Nx - 1 - ceil(jx);
 				if (jy < 0)
 					iy_min = ceil(-jy);
 				else
-					iy_max = ceil(jy);
+					iy_max = Ny - 1 - ceil(jy);
 				
 				// Now we can get the ranges for the base tile indexes (inclusive),
 				// corresponding to the current motion vector:
@@ -211,6 +231,8 @@ int main(int argc, char **argv)
 				int Iy1 = iy_min / NB;
 				int Iy2 = (iy_max-NB+1) / NB;
 				
+//				printf("%d %d %d %d %d %d %d %d %f\n", ix_min,ix_max,Jx,Jy,Ix1,Ix2,Iy1,Iy2,MQ);
+				
 				// The grid of blocks is for Ix and Iy parameters:
 				dim3 Grid_size(Ix2-Ix1+1, Iy2-Iy1+1);
 				
@@ -218,15 +240,34 @@ int main(int argc, char **argv)
 				// all allowed base image tiles, for the given motion vector (Jx,Jy) in MQ units
 				// Using the maximum 1024 threads per block, to cover 32x32 pixel tiles
 				dim3 Block_size(32,32);
-				motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,Jx,Jy,MQ,p_min,d_dt);								
+				motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,Jx,Jy,MQ,p_min,d_dt,d_test_image);								
+				
+				Jcount++;
 			}			
 		}
+			
+    gettimeofday (&tdr1, NULL);  
+    tdr = tdr0;
+    timeval_subtract (&restime, &tdr1, &tdr);
 
+			
+	if (Jcount == 0)
+		printf("No motion vectors in the given range of R=RMIN...RMAX\n");
+	else
+	{
+		printf("Processed %d motion vectors\n", Jcount);
+		printf ("time per motion vector: %e\n", restime/Jcount);
+		ERR( cudaMemcpy2D(h_test_image, Ny*sizeof(float), d_test_image, pitch, Ny*sizeof(float), Nx, cudaMemcpyDeviceToHost) )
+		cudaDeviceSynchronize();
+		dump_fits(Nx, Ny, 1, h_test_image, "output.fits");
+	}
 
-	free(buf0);
-	ERR( cudaFreeHost(h_image) )
-	ERR( cudaFree(d_img1) )
-	ERR( cudaFree(d_img2) )
+	free(buf0);	
+//	ERR( cudaFreeHost(h_image) )
+	free(h_image1);
+	free(h_image);
+//	ERR( cudaFreeHost(h_test_image) )
+	free(h_test_image);
 
 	return 0;
 }

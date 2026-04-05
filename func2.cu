@@ -91,7 +91,7 @@ void rebin(int i_image, float *buf0, int *Nx, int *Ny, long *Npix, float** h_ima
 	if (i_image == 0)
 	{
 		// We use cudaMallocHost instead of malloc to put the array in the pinned host memory
-		ERR( cudaMallocHost((void**)h_image, sizeof(float)* *Npix) )
+//		ERR( cudaMallocHost((void**)h_image, sizeof(float)* *Npix) )
 	}
 	
 	for (long i=0; i<*Npix; i++)
@@ -301,7 +301,8 @@ void rebin(int i_image, float *buf0, int *Nx, int *Ny, long *Npix, float** h_ima
 		long naxes[2] = {Ny, Nx};
 		fits_create_img(fk, FLOAT_IMG, 2, naxes, &status);
 		fits_error(status);
-		fits_write_img(fk, TFLOAT, 1, nelem1, img, &status);
+		long fpixel = 1;
+		fits_write_img(fk, TFLOAT, fpixel, nelem1, img, &status);
 		fits_error(status);
 		fits_close_file(fk, &status);		
 		
@@ -328,7 +329,7 @@ int date2mjd (int yr, int mn, int dy) {
 	
 /* ------------------------------------------------ */
 	
-__global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch, int Ix1, int Iy1, int Jx, int Jy, float MQ, float p_min, float *d_dt)
+__global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch, int Ix1, int Iy1, int Jx, int Jy, float MQ, float p_min, float *d_dt, float *d_test_image)
 {
 	// The main compute kernel: searches for moving objects over all images,
 	// all allowed base image tiles, for the given motion vector (Jx,Jy) in MQ units
@@ -351,11 +352,16 @@ __global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch,
 	int ix = jx + NB*Ixb;
 	int iy = jy + NB*Iyb;  // Fastest changing index
 	
+//	if (threadIdx.x==0 && blockIdx.x==0)
+//		printf("%d %d %d %d %d %d\n", Ixb, Iyb, jx, jy, ix, iy);
+//		printf("AA\n");
+//	return;
+	
+	
+	
 	// Loping over all images sequentially:
 	for (int i=0; i<N_images; i++)
 	{
-		__syncthreads(); 		
-
 		// Motion vector for the image i in pixels:
 		float dx = d_dt[i] * Jx*MQ;
 		float dy = d_dt[i] * Jy*MQ;
@@ -366,18 +372,16 @@ __global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch,
 		float fdx = dx - floor(dx);
 		float fdy = dy - floor(dy);		
 
-		if (i == 0)
-		// Base tile initialization
+		if (i==0 && threadIdx.x<NB && threadIdx.y<NB)
 		{
+			// Base tile initialization
 			// For the base tile only, skipping the last column and last row, because there is no interpolation:
-			if (threadIdx.x==NB || threadIdx.y==NB)
-				continue;
-			
 			// Pointer to the start of the image's row:
 			float *row = (float *)((char*)d_image[i] + ix * pitch);
 			base_tile[jx][jy] = row[iy]; // Coalesced read
 		}
-		else
+		
+		if (i > 0)
 		// image_tile initialization
 		{
 			// Pointer to the start of the image's row:
@@ -397,9 +401,23 @@ __global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch,
 				image_tile[jx+1][jy+1] *      fdx  *      fdy ;					
 		}
 		
+		__syncthreads(); 		
 	}
+
+	if (threadIdx.x<NB && threadIdx.y<NB)
+		// Saving brighest pixels (>p_min) in the image stack
+		if (base_tile[jx][jy] > p_min)
+		{
+			atomicInc(&Pixel_counter, MAX_PIXELS);
+		}
 	
-	
+/*
+	if (threadIdx.x<NB && threadIdx.y<NB)
+	{
+		float *row = (float *)((char*)d_test_image + ix * pitch);
+		row[iy] = base_tile[jx][jy]; // Coalesced write
+		}
+*/	
 	
 	return;
 }
