@@ -1,6 +1,7 @@
 #include "reconv.h"
 #include "asteroid_search.h"
 
+//extern __device__ unsigned int Pixel_counter;
 
 void Is_GPU_present()
 {
@@ -329,7 +330,7 @@ int date2mjd (int yr, int mn, int dy) {
 	
 /* ------------------------------------------------ */
 	
-__global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch, int Ix1, int Iy1, int Jx, int Jy, float MQ, float p_min, float *d_dt, float *d_test_image)
+__global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch, int Ix1, int Iy1, int Jx, int Jy, float MQ, float p_min, float *d_dt, float *d_test_image, struct List *d_list, int save_image, unsigned int *d_Pixel_counter)
 {
 	// The main compute kernel: searches for moving objects over all images,
 	// all allowed base image tiles, for the given motion vector (Jx,Jy) in MQ units
@@ -374,7 +375,7 @@ __global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch,
 
 		if (i==0 && threadIdx.x<NB && threadIdx.y<NB)
 		{
-			// Base tile initialization
+			// Base 31x31 tile initialization
 			// For the base tile only, skipping the last column and last row, because there is no interpolation:
 			// Pointer to the start of the image's row:
 			float *row = (float *)((char*)d_image[i] + ix * pitch);
@@ -382,7 +383,7 @@ __global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch,
 		}
 		
 		if (i > 0)
-		// image_tile initialization
+		// 32x32 image_tile initialization
 		{
 			// Pointer to the start of the image's row:
 			float *row = (float *)((char*)d_image[i] + ix0 * pitch);
@@ -406,18 +407,25 @@ __global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch,
 
 	if (threadIdx.x<NB && threadIdx.y<NB)
 		// Saving brighest pixels (>p_min) in the image stack
+//if (threadIdx.x == 0)	
 		if (base_tile[jx][jy] > p_min)
 		{
-			atomicInc(&Pixel_counter, MAX_PIXELS);
+//	printf("%f %f\n", p_min, base_tile[jx][jy]);
+			int ii = atomicInc(d_Pixel_counter, MAX_PIXELS);
+//printf("%d %d\n", ii, Pixel_counter);			
+			d_list[ii].Jx = Jx;
+			d_list[ii].Jy = Jy;
+			d_list[ii].ix = ix;
+			d_list[ii].iy = iy;
+			d_list[ii].p = base_tile[jx][jy];
 		}
 	
-/*
-	if (threadIdx.x<NB && threadIdx.y<NB)
-	{
-		float *row = (float *)((char*)d_test_image + ix * pitch);
-		row[iy] = base_tile[jx][jy]; // Coalesced write
+	if (save_image)
+		if (threadIdx.x<NB && threadIdx.y<NB)
+		{
+			float *row = (float *)((char*)d_test_image + ix * pitch);
+			row[iy] = base_tile[jx][jy]; // Coalesced write
 		}
-*/	
 	
 	return;
 }

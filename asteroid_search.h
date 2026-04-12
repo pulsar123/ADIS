@@ -6,9 +6,13 @@
 #include <fitsio.h>
 #include <string.h>
 
+
 #ifndef ASTEROID_SEARCH_H
   #define ASTEROID_SEARCH_H
   #include "cuda_errors.h"
+
+
+//#define TEST
 
 #ifdef _OPENMP
   // OpenMP is enabled
@@ -24,9 +28,17 @@
 #define NB 31
 
 // Maximum number of stored brighest pixels
-#define MAX_PIXELS 1000000
+#define MAX_PIXELS 100000000
 
-__device__ unsigned int Pixel_counter = 0;
+struct List
+{
+	int Jx; // Motion vector
+	int Jy;
+	int ix; // Base pixel coordinates
+	int iy;
+	float p; // Stacked pixel brightness
+};
+
 
 //void fits_error(int status);
 
@@ -44,6 +56,6 @@ void subtract_background(int i_image, float *img, int Nx, int Ny, int NTx, int N
 
 int date2mjd (int yr, int mn, int dy);
 
-__global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch, int Ix1, int Iy1, int Jx, int Jy, float MQ, float p_min, float *d_dt, float *d_test_image);
+__global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch, int Ix1, int Iy1, int Jx, int Jy, float MQ, float p_min, float *d_dt, float *d_test_image, struct List *d_list, int save_image, unsigned int *d_Pixel_counter);
 
 #endif

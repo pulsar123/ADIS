@@ -10,6 +10,8 @@ nvcc -O3 asteroid_search.cu func.c func2.cu -lfftw3 -lcfitsio -lm -lz -o asteroi
 #include "reconv.h"
 #include "asteroid_search.h"
 
+//__device__ unsigned int Pixel_counter;
+
 int main(int argc, char **argv)
 {
     struct timeval  tdr0, tdr1, tdr;
@@ -66,6 +68,7 @@ int main(int argc, char **argv)
 		fits_open_file(&f0, file0, READONLY, &status);
 		fits_error(status);
 		
+#ifndef TEST
 		// Computing time offsets from the first image:
 		fits_read_key(f0, TSTRING, "DATE-OBS", date_obs, NULL, &status);
 		fits_read_key(f0, TDOUBLE, "EXPTIME", &exposure, NULL, &status);
@@ -77,6 +80,7 @@ int main(int argc, char **argv)
 			mjd0 = mjd;
 		h_dt[i_image] = mjd - mjd0; //  in days
 		printf("DATE-OBS: %s : %lf\n", date_obs, h_dt[i_image]);
+#endif		
 		
 		fits_get_img_dim(f0, &naxis, &status);
 		fits_get_img_size(f0, 3, naxes, &status);
@@ -142,11 +146,14 @@ int main(int argc, char **argv)
 		
 	} // i_image loop
 
+#ifndef TEST
 	// Normalizing the time shift for the last image to 1:
 	for (int i=0; i<N_images; i++)
 		h_dt[i] = h_dt[i]/h_dt[N_images-1];
-//	h_dt[0] = 0.0;
-//	h_dt[1] = 1.0;
+#else	
+	h_dt[0] = 0.0;
+	h_dt[1] = 1.0;
+#endif	
 
 	ERR( cudaMemcpy(d_dt, h_dt, N_images*sizeof(float), cudaMemcpyHostToDevice) )
 	ERR( cudaMemcpy(d_image, h_image, N_images*sizeof(float*), cudaMemcpyHostToDevice) )
@@ -164,8 +171,9 @@ int main(int argc, char **argv)
 	
 	// The motion vector space is between radii RMIN and RMAX (both are in MQ units)
 	// RMIN and RMAX should come as command line arguments
-	int RMIN = 20;
-	int RMAX = 20;
+	int RMIN = 150;
+	int RMAX = 170;
+	
 	// RMAX is limited by the image diagonal length (distance between the farthest tiles):
 	int diag = floor(NB * sqrt(pow(Nxb-1,2) + pow(Nyb-1,2)) / MQ);
 	if (RMAX > diag)
@@ -179,8 +187,8 @@ int main(int argc, char **argv)
 	// Should be input parameter:
 	float p_min_std = 5.0;
 	
-	// Master image std (should come from FITS headers, or command line)
-	float std_master = 1e-4;
+	// Master image std (should come from FITS headers, or command line) 3.722e-4
+	float std_master = 3.722e-4;
 	
 	// Signal detection theshold for image stacks (assuming summation stacking):
 	float p_min = p_min_std * std_master * N_images;
@@ -190,7 +198,18 @@ int main(int argc, char **argv)
 	float *h_test_image = NULL;
 //	ERR( cudaMallocHost(&h_test_image, (size_t)(Nx*Ny*sizeof(float))) )
 	h_test_image = (float *)malloc(Npix*sizeof(float));
+	struct List *h_list = NULL;
+	h_list = (struct List *)malloc(MAX_PIXELS*sizeof(struct List));
+	struct List *d_list = NULL;
+	ERR (cudaMalloc(&d_list, MAX_PIXELS*sizeof(struct List)))
+	
+	unsigned int *d_Pixel_counter = NULL;
+	ERR (cudaMalloc(&d_Pixel_counter, sizeof(unsigned int)))
+	unsigned int h_Pixel_counter = 0;
+	cudaMemcpy(d_Pixel_counter, &h_Pixel_counter, sizeof(unsigned int), cudaMemcpyHostToDevice);
 
+	
+	cudaDeviceSynchronize();
     gettimeofday (&tdr0, NULL);  
 	
 	int Jcount = 0;
@@ -226,9 +245,9 @@ int main(int argc, char **argv)
 				
 				// Now we can get the ranges for the base tile indexes (inclusive),
 				// corresponding to the current motion vector:
-				int Ix1 = ix_min / NB;
+				int Ix1 = (ix_min+NB-1) / NB;
 				int Ix2 = (ix_max-NB+1) / NB;
-				int Iy1 = iy_min / NB;
+				int Iy1 = (iy_min+NB-1) / NB;
 				int Iy2 = (iy_max-NB+1) / NB;
 				
 //				printf("%d %d %d %d %d %d %d %d %f\n", ix_min,ix_max,Jx,Jy,Ix1,Ix2,Iy1,Iy2,MQ);
@@ -240,12 +259,13 @@ int main(int argc, char **argv)
 				// all allowed base image tiles, for the given motion vector (Jx,Jy) in MQ units
 				// Using the maximum 1024 threads per block, to cover 32x32 pixel tiles
 				dim3 Block_size(32,32);
-				motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,Jx,Jy,MQ,p_min,d_dt,d_test_image);								
+				motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,Jx,Jy,MQ,p_min,d_dt,d_test_image,d_list,0,d_Pixel_counter);
 				
 				Jcount++;
 			}			
 		}
-			
+
+	cudaDeviceSynchronize();
     gettimeofday (&tdr1, NULL);  
     tdr = tdr0;
     timeval_subtract (&restime, &tdr1, &tdr);
@@ -260,6 +280,37 @@ int main(int argc, char **argv)
 		ERR( cudaMemcpy2D(h_test_image, Ny*sizeof(float), d_test_image, pitch, Ny*sizeof(float), Nx, cudaMemcpyDeviceToHost) )
 		cudaDeviceSynchronize();
 		dump_fits(Nx, Ny, 1, h_test_image, "output.fits");
+		
+		ERR( cudaMemcpy(&h_Pixel_counter, d_Pixel_counter, sizeof(unsigned int), cudaMemcpyDeviceToHost))
+		cudaDeviceSynchronize();
+		printf("Number of bright pixels: %d\n", h_Pixel_counter);
+		if (h_Pixel_counter > 0)
+		{
+			ERR( cudaMemcpy(h_list, d_list, h_Pixel_counter*sizeof(struct List), cudaMemcpyDeviceToHost))
+			cudaDeviceSynchronize();
+			float pmax = -1e30;
+			int imax = -1;
+			for (int i=0; i<h_Pixel_counter; i++)
+			{
+				if (h_list[i].p > pmax)
+				{
+					pmax = h_list[i].p;
+					imax = i;
+				}
+			}
+			printf("Motion vector: (%d, %d); pixel coords: (%d, %d); p=%f (%f std)\n",
+			h_list[imax].Jx, h_list[imax].Jy, h_list[imax].ix, h_list[imax].iy, h_list[imax].p,
+			h_list[imax].p/(std_master*N_images));
+			
+			FILE *fp = fopen("list.dat", "w");
+			for (int i=0; i<h_Pixel_counter; i++)
+			{
+				fprintf(fp, "%d %d %d %d %f\n", h_list[i].Jx, h_list[i].Jy, h_list[i].ix, h_list[i].iy,
+				h_list[i].p/(std_master*N_images));
+			}
+			fclose(fp);
+			
+		}
 	}
 
 	free(buf0);	
