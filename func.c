@@ -238,7 +238,7 @@ void fft_kernel(int Nx, int Ny,
 void convolve_image(int Nx, int Ny,
                     fftw_complex *F0,
                     fftw_complex *K,
-                    float *out, float HPF)
+                    float *out)
 {
     fftw_complex *Fout = fftw_malloc(sizeof(fftw_complex)*Nx*Ny);
 
@@ -253,38 +253,6 @@ void convolve_image(int Nx, int Ny,
         Fout[i][1] = a*d + b*c;
     }
 	
-	// Optional High Pass Filter, with the pixel radius given by HPF
-	if (HPF > 0.0)
-	{
-	int cx = Nx/2;
-    int cy = Ny/2;
-    /* circular shift */
-    for (int x=0;x<Nx;x++) {
-        double dx = (x + cx) % Nx - cx;
-//        double dx = x - cx;
-        for (int y=0;y<Ny;y++) {
-            double dy = (y + cy) % Ny - cy;
-//        double dy = y - cy;
-            double r = sqrt(dx*dx + dy*dy);
-			if (r < 0.5*HPF)
-			{
-				Fout[x*Ny + y][0] = 0.0;
-				Fout[x*Ny + y][1] = 0.0;
-			}
-			else if (r < HPF)
-				// Setting to zero at lower frequencies
-			{
-				double t = (r-0.5*HPF)/(HPF-0.5*HPF);
-				// w(t) = 0 at t=0, =0.5 at t=0.5, =1 at t=1, and zero derivatives on both ends
-				double w = -t*t*(-3.0 + 2.0*t);
-
-				Fout[x*Ny + y][0] = w*Fout[x*Ny + y][0];
-				Fout[x*Ny + y][1] = w*Fout[x*Ny + y][1];
-			}
-        }
-    }
-	}
-
     /* inverse FFT */
 	fftw_plan p;
     #ifdef _OPENMP
@@ -526,9 +494,8 @@ void sigma_clipping(float *image, long plane_pixels, double Nsigma, double *p0, 
 
 /* ------------------------------------------------ */
 
-	void gauss_blur(int Nx, int Ny, float* img, float *img_out, float sgm, float HPF)
+	void gauss_blur(int Nx, int Ny, float* img, float *img_out, float sgm)
 	// Applying gaussian blur to img, with sgm radius
-	// I need padding!
 	{
 		
 		int Pad = (int)(10*sgm);
@@ -572,7 +539,7 @@ void sigma_clipping(float *image, long plane_pixels, double Nsigma, double *p0, 
 		fft_image(Px, Py, G, FG);		
 		
 		// Reusing G to store the convolution result (padded):
-		convolve_image(Px, Py, FG, FI, G, HPF);
+		convolve_image(Px, Py, FG, FI, G);
 		
 		// Cropping the convolved result, storing in img_out:
 		crop_image_centered(Nx, Ny, Px, Py, G, img_out);

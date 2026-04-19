@@ -10,7 +10,6 @@ nvcc -O3 asteroid_search.cu func.c func2.cu -lfftw3 -lcfitsio -lm -lz -o asteroi
 #include "reconv.h"
 #include "asteroid_search.h"
 
-//__device__ unsigned int Pixel_counter;
 
 int main(int argc, char **argv)
 {
@@ -125,6 +124,8 @@ int main(int argc, char **argv)
 		int NTy = (int)((float)NTx / (float)Nx * (float)Ny + 0.5);
 		printf("Background model: %d x %d tiles, %d x %d pixels each\n", NTy, NTx, Ny/NTy, Nx/NTx);
 		subtract_background(i_image, buf0, Nx, Ny, NTx, NTy);
+		
+		gauss_blur(Nx, Ny, buf0, buf0, sgm_Gauss);
 //		dump_fits(Nx, Ny, 1, buf0, "image.fits");
 		
 		if (i_image == 0)
@@ -151,8 +152,8 @@ int main(int argc, char **argv)
 	for (int i=0; i<N_images; i++)
 		h_dt[i] = h_dt[i]/h_dt[N_images-1];
 #else	
-	h_dt[0] = 0.0;
-	h_dt[1] = 1.0;
+	for (int i=0; i<N_images; i++)
+		h_dt[i] = (float)i / (float)(N_images - 1);
 #endif	
 
 	ERR( cudaMemcpy(d_dt, h_dt, N_images*sizeof(float), cudaMemcpyHostToDevice) )
@@ -171,8 +172,8 @@ int main(int argc, char **argv)
 	
 	// The motion vector space is between radii RMIN and RMAX (both are in MQ units)
 	// RMIN and RMAX should come as command line arguments
-	int RMIN = 150;
-	int RMAX = 170;
+	int RMIN = 1;
+	int RMAX = 1000;
 	
 	// RMAX is limited by the image diagonal length (distance between the farthest tiles):
 	int diag = floor(NB * sqrt(pow(Nxb-1,2) + pow(Nyb-1,2)) / MQ);
@@ -184,10 +185,10 @@ int main(int argc, char **argv)
 		RMIN = 0;
 	
 	// Minimum pixel brightness (in master image std units) to qualify for a detection
-	// Should be input parameter:
-	float p_min_std = 5.0;
+	// Should be input parameter:  25, 5.0
+	float p_min_std = 1.75;
 	
-	// Master image std (should come from FITS headers, or command line) 3.722e-4
+	// Master image std (should come from FITS headers, or command line) 0.0028, 3.722e-4
 	float std_master = 3.722e-4;
 	
 	// Signal detection theshold for image stacks (assuming summation stacking):
@@ -213,59 +214,36 @@ int main(int argc, char **argv)
     gettimeofday (&tdr0, NULL);  
 	
 	int Jcount = 0;
+	dim3 Grid_size;
+	dim3 Block_size(32,32);
+	int Ix1, Iy1;
 	// Double loop going over all possible motion vectors:
 	// Jx, Jy are in MQ units
-//	for (int Jx=10; Jx<=10; Jx++)
-//		for (int Jy=10; Jy<=10; Jy++)
-	for (int Jx=-RMAX; Jx<=RMAX; Jx++)
+	for (int Jx=-RMAX; Jx<=RMAX; Jx++)		
+	{
+		printf("Jx = %d\n", Jx);
 		for (int Jy=-RMAX; Jy<=RMAX; Jy++)
 		{
 			// Length of the motion vector in MQ units:
 			float R = sqrt(float(Jx*Jx + Jy*Jy));
 			if (R >= RMIN && R <= RMAX)
 			{
-				// Motion vector in pixels:
-				float jx = Jx*MQ;
-				float jy = Jy*MQ;
-				
-				// Maximum range of base image pixels usable for this motion vector:
-				// ix_min...ix_max, iy_min...iy_max (inclusive)
-				int ix_min = 0;
-				int ix_max = Nx - 1;
-				int iy_min = 0;
-				int iy_max = Ny - 1;
-				if (jx < 0)
-					ix_min = ceil(-jx);
-				else
-					ix_max = Nx - 1 - ceil(jx);
-				if (jy < 0)
-					iy_min = ceil(-jy);
-				else
-					iy_max = Ny - 1 - ceil(jy);
-				
-				// Now we can get the ranges for the base tile indexes (inclusive),
-				// corresponding to the current motion vector:
-				int Ix1 = (ix_min+NB-1) / NB;
-				int Ix2 = (ix_max-NB+1) / NB;
-				int Iy1 = (iy_min+NB-1) / NB;
-				int Iy2 = (iy_max-NB+1) / NB;
-				
-//				printf("%d %d %d %d %d %d %d %d %f\n", ix_min,ix_max,Jx,Jy,Ix1,Ix2,Iy1,Iy2,MQ);
-				
+				find_kernel_parameters(Jx, Jy, MQ, Nx, Ny, &Grid_size, &Ix1, &Iy1);
+								
 				// The grid of blocks is for Ix and Iy parameters:
-				dim3 Grid_size(Ix2-Ix1+1, Iy2-Iy1+1);
+//				dim3 Grid_size(Ix2-Ix1+1, Iy2-Iy1+1);
 				
 				// The main compute kernel: searches for moving objects over all images,
 				// all allowed base image tiles, for the given motion vector (Jx,Jy) in MQ units
 				// Using the maximum 1024 threads per block, to cover 32x32 pixel tiles
-				dim3 Block_size(32,32);
-				motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,Jx,Jy,MQ,p_min,d_dt,d_test_image,d_list,0,d_Pixel_counter);
+				motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,Jx,Jy,MQ,p_min,d_dt,d_test_image,d_list,0,d_Pixel_counter,Nx,Ny);
 				
 				Jcount++;
 			}			
 		}
+		}
 
-	cudaDeviceSynchronize();
+	ERR( cudaDeviceSynchronize() )
     gettimeofday (&tdr1, NULL);  
     tdr = tdr0;
     timeval_subtract (&restime, &tdr1, &tdr);
@@ -277,9 +255,6 @@ int main(int argc, char **argv)
 	{
 		printf("Processed %d motion vectors\n", Jcount);
 		printf ("time per motion vector: %e\n", restime/Jcount);
-		ERR( cudaMemcpy2D(h_test_image, Ny*sizeof(float), d_test_image, pitch, Ny*sizeof(float), Nx, cudaMemcpyDeviceToHost) )
-		cudaDeviceSynchronize();
-		dump_fits(Nx, Ny, 1, h_test_image, "output.fits");
 		
 		ERR( cudaMemcpy(&h_Pixel_counter, d_Pixel_counter, sizeof(unsigned int), cudaMemcpyDeviceToHost))
 		cudaDeviceSynchronize();
@@ -309,6 +284,15 @@ int main(int argc, char **argv)
 				h_list[i].p/(std_master*N_images));
 			}
 			fclose(fp);
+
+			find_kernel_parameters(h_list[imax].Jx, h_list[imax].Jy, MQ, Nx, Ny, &Grid_size, &Ix1, &Iy1);
+
+			motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,
+			h_list[imax].Jx,h_list[imax].Jy,MQ,p_min,d_dt,d_test_image,d_list,1,d_Pixel_counter,Nx,Ny);
+
+			ERR( cudaMemcpy2D(h_test_image, Ny*sizeof(float), d_test_image, pitch, Ny*sizeof(float), Nx, cudaMemcpyDeviceToHost) )
+			cudaDeviceSynchronize();
+			dump_fits(Nx, Ny, 1, h_test_image, "output.fits");
 			
 		}
 	}

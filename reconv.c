@@ -354,7 +354,7 @@ int main(int argc, char **argv)
 		// Direct FFT: k_spatial -> K
 		fft_kernel(Px, Py, &k_spatial[ithread*P], &K[ithread*P]);
 
-        convolve_image(Px, Py, &F0[ithread*P], &K[ithread*P], &padded_out[ithread*P], 0.0);
+        convolve_image(Px, Py, &F0[ithread*P], &K[ithread*P], &padded_out[ithread*P]);
 
         /* crop */
 		crop_image_centered(Nx, Ny, Px, Py, &padded_out[ithread*P], &cropped[ithread*plane_pixels]);
