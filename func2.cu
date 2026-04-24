@@ -285,45 +285,6 @@ void rebin(int i_image, float *buf0, int *Nx, int *Ny, long *Npix, float** h_ima
 	}
 
 /* ------------------------------------------------ */
-
-
-	
-	void dump_fits (int Nx, int Ny, int Nc, float *img, const char *name)
-	// Dump a 2D image into a FITS file (for debugging)
-	{
-		int status=0; 
-		float bias = 0.03;
-		
-		long Npixels = Nx*Ny;
-		
-		float *img1 = (float *)malloc(Npixels*sizeof(float));
-		
-		
-		for (long i = 0; i < Npixels; i++)
-		{
-			img1[i] = img[i] + bias;
-		}
-		
-		fitsfile *fk;
-		fits_create_file(&fk, name, &status);
-		fits_error(status);
-		long nelem1  = (long)Nx * Ny * Nc;
-//		long naxes[3] = {Ny, Nx, Nc};
-//		fits_create_img(fk, FLOAT_IMG, 3, naxes, &status);
-		long naxes[2] = {Ny, Nx};
-		fits_create_img(fk, FLOAT_IMG, 2, naxes, &status);
-		fits_error(status);
-		long fpixel = 1;
-		fits_write_img(fk, TFLOAT, fpixel, nelem1, img1, &status);
-		fits_error(status);
-		fits_close_file(fk, &status);		
-		
-		free(img1);
-		
-		return;
-	}
-	
-/* ------------------------------------------------ */
 	
 int date2mjd (int yr, int mn, int dy) {
 	// Gregorian date -> Modified Julian Date (https://github.com/mdwarfgeek/lib/blob/master/mjd.c)

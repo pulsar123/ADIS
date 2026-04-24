@@ -235,12 +235,15 @@ void fft_kernel(int Nx, int Ny,
 
 /* ------------------------------------------------ */
 
-void convolve_image(int Nx, int Ny,
+void convolve_image(int i_image, int N_images, int Nx, int Ny,
                     fftw_complex *F0,
                     fftw_complex *K,
                     float *out)
 {
-    fftw_complex *Fout = fftw_malloc(sizeof(fftw_complex)*Nx*Ny);
+	static fftw_complex *Fout;
+
+	if (i_image == 0)
+		Fout = fftw_malloc(sizeof(fftw_complex)*Nx*Ny);
 
     /* multiply in Fourier space */
     for (int i=0;i<Nx*Ny;i++) {
@@ -277,23 +280,30 @@ void convolve_image(int Nx, int Ny,
     for (int i=0;i<Nx*Ny;i++)
         out[i] = Fout[i][0] * norm;
 
-    fftw_free(Fout);
+	if (i_image == N_images-1)
+		fftw_free(Fout);
 }
 
 /* ------------------------------------------------ */
 
 
-void fft_images_padded(int Nx, int Ny,
+void fft_images_padded(int i_image, int N_images,int Nx, int Ny,
                        int Px, int Py,
                        float *img0,
                        fftw_complex *F0,
 					   int Pad)
 {
 	// First pad the image with Pad width, then direct FFT -> F0
+	static float *p0;
+	static fftw_complex *in;
 	
     int P = Px * Py;
 
-    float *p0 = calloc(P, sizeof(float));
+	if (i_image == 0)
+	{
+		p0 = calloc(P, sizeof(float));
+		in = fftw_malloc(sizeof(fftw_complex)*P);
+	}
 
     /* zero-fill */
     for (int i = 0; i < Px*Py; i++)
@@ -307,8 +317,6 @@ void fft_images_padded(int Nx, int Ny,
         }
     }
 	
-
-    fftw_complex *in = fftw_malloc(sizeof(fftw_complex)*P);
     fftw_plan plan;
 
     /* Image0 */
@@ -335,8 +343,11 @@ void fft_images_padded(int Nx, int Ny,
 	omp_unset_lock(&my_lock[9]);
 	#endif
 
-    fftw_free(in);
-    free(p0);
+	if (i_image == N_images-1)
+	{
+		fftw_free(in);
+		free(p0);
+	}
 }
 
 
@@ -494,9 +505,15 @@ void sigma_clipping(float *image, long plane_pixels, double Nsigma, double *p0, 
 
 /* ------------------------------------------------ */
 
-	void gauss_blur(int Nx, int Ny, float* img, float *img_out, float sgm)
+	void gauss_blur(int i_image, int N_images, int Nx, int Ny, float* img, float *img_out, float sgm)
 	// Applying gaussian blur to img, with sgm radius
+	// i_image: image index
+	// N_images: number of images in the sequence
 	{
+		static float *G;
+		static float *R;
+		static fftw_complex *FG;
+		static fftw_complex *FI;
 		
 		int Pad = (int)(10*sgm);
 		int Px = Nx + 2*Pad;
@@ -504,54 +521,106 @@ void sigma_clipping(float *image, long plane_pixels, double Nsigma, double *p0, 
 		long P = Px * Py;		
 		long N = Nx * Ny;
 
-		
-		// Fill an image with a Gaussian, using circular shifts and padding:
-		float *G = malloc(sizeof(float) * P);
-		double sum = 0.0;
-		double sgm2 = sgm*sgm;
-		double cutoff2 = (double)(Pad*Pad);
-		for (int x=0; x<Px; x++)
+		if (i_image == 0)
 		{
-			int dx = (x < Px / 2) ? x : x - Px;
-			for (int y=0; y<Py; y++)
+			// Fill an image with a Gaussian, using circular shifts and padding:
+			G = (float *)malloc(sizeof(float) * P);
+			double sum = 0.0;
+			double sgm2 = sgm*sgm;
+			double cutoff2 = (double)(Pad*Pad);
+			for (int x=0; x<Px; x++)
 			{
-				int dy = (y < Py / 2) ? y : y - Py;
-				double r2 = (double)(dx*dx + dy*dy);
-				if (r2 < cutoff2)
+				int dx = (x < Px / 2) ? x : x - Px;
+				for (int y=0; y<Py; y++)
 				{
-					double val = exp(-r2 / (2.0 * sgm2));
-					G[x*Py + y] = val;
-					sum += val;
+					int dy = (y < Py / 2) ? y : y - Py;
+					double r2 = (double)(dx*dx + dy*dy);
+					if (r2 < cutoff2)
+					{
+						double val = exp(-r2 / (2.0 * sgm2));
+						G[x*Py + y] = val;
+						sum += val;
+					}
+					else
+						G[x*Py + y] = 0.0;
 				}
-				else
-					G[x*Py + y] = 0.0;
 			}
+			
+			for (long i = 0; i < P; i++)
+				G[i] /= sum;
+
+
+			FG = fftw_malloc(sizeof(fftw_complex)*P);
+			FI = fftw_malloc(sizeof(fftw_complex)*P);
+			fft_image(Px, Py, G, FG);					
+			R = (float *)malloc(sizeof(float) * P);
 		}
-		
-		for (long i = 0; i < P; i++)
-			G[i] /= sum;
 
-
-		fftw_complex *FG = fftw_malloc(sizeof(fftw_complex)*P);
-		fftw_complex *FI = fftw_malloc(sizeof(fftw_complex)*P);
 		
-		fft_images_padded(Nx, Ny, Px, Py, img, FI, Pad);
-		fft_image(Px, Py, G, FG);		
 		
-		// Reusing G to store the convolution result (padded):
-		convolve_image(Px, Py, FG, FI, G);
+		fft_images_padded(i_image, N_images, Nx, Ny, Px, Py, img, FI, Pad);
+		
+		convolve_image(i_image, N_images, Px, Py, FG, FI, R);
 		
 		// Cropping the convolved result, storing in img_out:
-		crop_image_centered(Nx, Ny, Px, Py, G, img_out);
+		crop_image_centered(Nx, Ny, Px, Py, R, img_out);
 		
-		free(G);
-		fftw_free(FI);
-		fftw_free(FG);
+
+		if (i_image == N_images-1)
+		{
+			free(G);
+			free(R);
+			fftw_free(FG);
+			fftw_free(FI);
+		}
 		
 		return;		
 	}
 
 
+/* ------------------------------------------------ */
+
+
+	
+	void dump_fits (int Nx, int Ny, int Nc, float *img, const char *name)
+	// Dump a 2D image into a FITS file (for debugging)
+	{
+		char buffer[50];
+		int status=0; 
+		float bias = 0.03;
+		
+		long Npixels = Nx*Ny;
+		
+		float *img1 = (float *)malloc(Npixels*sizeof(float));
+		
+		
+		for (long i = 0; i < Npixels; i++)
+		{
+			img1[i] = img[i] + bias;
+		}
+		
+		sprintf(buffer, "rm -f %s >/dev/null", name);
+		if (system(buffer))
+			printf("Could not delete the file %s\n", name);
+		fitsfile *fk;
+		fits_create_file(&fk, name, &status);
+		fits_error(status);
+		long nelem1  = (long)Nx * Ny * Nc;
+//		long naxes[3] = {Ny, Nx, Nc};
+//		fits_create_img(fk, FLOAT_IMG, 3, naxes, &status);
+		long naxes[2] = {Ny, Nx};
+		fits_create_img(fk, FLOAT_IMG, 2, naxes, &status);
+		fits_error(status);
+		long fpixel = 1;
+		fits_write_img(fk, TFLOAT, fpixel, nelem1, img1, &status);
+		fits_error(status);
+		fits_close_file(fk, &status);		
+		
+		free(img1);
+		
+		return;
+	}
+	
 
 /* ------------------------------------------------ */
 

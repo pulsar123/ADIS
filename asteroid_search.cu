@@ -13,7 +13,7 @@ nvcc -O3 asteroid_search.cu func.c func2.cu -lfftw3 -lcfitsio -lm -lz -o asteroi
 
 int main(int argc, char **argv)
 {
-    struct timeval  tdr0, tdr1, tdr;
+    struct timeval  tdr0, tdr1, tdr, tdr2, tdr3;
     double restime;
 	int status = 0, naxis;
     long naxes[3];
@@ -26,7 +26,7 @@ int main(int argc, char **argv)
 	int year, month, day, hour, minute;
     double second, exposure;	
 	
-	float FWHM = 5.0; // Needs to be provided via images' FITS headers
+	float FWHM = 7.7; // Needs to be provided via images' FITS headers; 7.7
 
 	// Processing command line arguments
 	
@@ -125,14 +125,20 @@ int main(int argc, char **argv)
 		printf("Background model: %d x %d tiles, %d x %d pixels each\n", NTy, NTx, Ny/NTy, Nx/NTx);
 		subtract_background(i_image, buf0, Nx, Ny, NTx, NTy);
 		
-		gauss_blur(Nx, Ny, buf0, buf0, sgm_Gauss);
+		gettimeofday (&tdr2, NULL);  		
+		gauss_blur(i_image, N_images, Nx, Ny, buf0, buf0, sgm_Gauss);
+		gettimeofday (&tdr3, NULL);  
+		tdr = tdr2;
+		timeval_subtract (&restime, &tdr3, &tdr);
+		printf("Convolution time: %e\n", restime);
+		
 //		dump_fits(Nx, Ny, 1, buf0, "image.fits");
 		
 		if (i_image == 0)
 //			ERR( cudaMallocHost(&h_image1, sizeof(float)*Npix) )
 			h_image1 = (float *)malloc(sizeof(float)*Npix);
 		
-		rebin(i_image, buf0, &Nx, &Ny, &Npix, &h_image1);  // allocates h_image on first call
+		rebin(i_image, buf0, &Nx, &Ny, &Npix, &h_image1);
 		
 		// x is for the rows, y is for columns
 		// This is the host-device sync point
@@ -146,6 +152,8 @@ int main(int argc, char **argv)
 			printf("Error in cudaMemcpy!\n");		
 		
 	} // i_image loop
+
+exit(0);
 
 #ifndef TEST
 	// Normalizing the time shift for the last image to 1:
@@ -172,8 +180,8 @@ int main(int argc, char **argv)
 	
 	// The motion vector space is between radii RMIN and RMAX (both are in MQ units)
 	// RMIN and RMAX should come as command line arguments
-	int RMIN = 1;
-	int RMAX = 1000;
+	int RMIN = 50;
+	int RMAX = 500;
 	
 	// RMAX is limited by the image diagonal length (distance between the farthest tiles):
 	int diag = floor(NB * sqrt(pow(Nxb-1,2) + pow(Nyb-1,2)) / MQ);
@@ -230,9 +238,6 @@ int main(int argc, char **argv)
 			{
 				find_kernel_parameters(Jx, Jy, MQ, Nx, Ny, &Grid_size, &Ix1, &Iy1);
 								
-				// The grid of blocks is for Ix and Iy parameters:
-//				dim3 Grid_size(Ix2-Ix1+1, Iy2-Iy1+1);
-				
 				// The main compute kernel: searches for moving objects over all images,
 				// all allowed base image tiles, for the given motion vector (Jx,Jy) in MQ units
 				// Using the maximum 1024 threads per block, to cover 32x32 pixel tiles

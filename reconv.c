@@ -1,8 +1,7 @@
-// reconv 5: includes rescaling
-// 7: full processing for each channel; removing biases fort each channel; command line handler
-// 8: optional kernel output
-
 #include "reconv.h"
+
+// To compile:
+//   gcc -O2 reconv.c func.c -lfftw3 -lcfitsio -lm -lz -o reconv
 
 int	verbose = 0;
 
@@ -38,7 +37,7 @@ int main(int argc, char **argv)
 	double outbias = 0.0;
 	char *fkernel = "";
 	int dump_kernel = 0;
-	double sgm_blur = 0.0;
+	float sgm_blur = 0.0;
 	int perform_blur = 0;
 	int no_rescale = 0;
 	double bmax = -1.0;
@@ -312,7 +311,7 @@ int main(int argc, char **argv)
 
 		if (perform_blur)
 		{
-			gauss_blur(Nx, Ny, &img1[ithread*plane_pixels], sgm_blur);
+			gauss_blur(0, 1, Nx, Ny, &img1[ithread*plane_pixels], &img1[ithread*plane_pixels], sgm_blur);
 		}
 
 		double p1, sgm1, p_master, sgm_master;
@@ -325,8 +324,8 @@ int main(int argc, char **argv)
 		sigma_clipping(&img1[ithread*plane_pixels], plane_pixels, Nsigma, &p1, &sgm1, &Npix1, &k1);
 			
 		// Direct 2D FFT transform of padded img0/img1 with zero imaginary part -> F0/F1
-		fft_images_padded(Nx, Ny, Px, Py, &img0[ithread*plane_pixels], &F0[ithread*P], Pad);
-		fft_images_padded(Nx, Ny, Px, Py, &img1[ithread*plane_pixels], &F1[ithread*P], Pad);
+		fft_images_padded(0, 2, Nx, Ny, Px, Py, &img0[ithread*plane_pixels], &F0[ithread*P], Pad);
+		fft_images_padded(1, 2, Nx, Ny, Px, Py, &img1[ithread*plane_pixels], &F1[ithread*P], Pad);
 
 		/* ---------- Kernel estimation ---------- */
 		// Complex division F1/F0 = K
@@ -354,7 +353,7 @@ int main(int argc, char **argv)
 		// Direct FFT: k_spatial -> K
 		fft_kernel(Px, Py, &k_spatial[ithread*P], &K[ithread*P]);
 
-        convolve_image(Px, Py, &F0[ithread*P], &K[ithread*P], &padded_out[ithread*P]);
+        convolve_image(0, 1, Px, Py, &F0[ithread*P], &K[ithread*P], &padded_out[ithread*P]);
 
         /* crop */
 		crop_image_centered(Nx, Ny, Px, Py, &padded_out[ithread*P], &cropped[ithread*plane_pixels]);
@@ -427,7 +426,7 @@ int main(int argc, char **argv)
 	
 	if (dump_kernel)
 	{
-		dump_fits(Px, Py, kernel, fkernel);
+		dump_fits(Px, Py, 3, kernel, fkernel);
 	}
 
 	long fpixel = 1;

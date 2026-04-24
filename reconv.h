@@ -47,12 +47,12 @@ void fft_kernel(int Nx, int Ny,
                 fftw_complex *k_spatial,
                 fftw_complex *K);
 
-void convolve_image(int Nx, int Ny,
+void convolve_image(int i_image, int N_images, int Nx, int Ny,
                     fftw_complex *F0,
                     fftw_complex *K,
                     float *out);
 
-void fft_images_padded(int Nx, int Ny,
+void fft_images_padded(int i_image, int N_images, int Nx, int Ny,
                        int Px, int Py,
                        float *img0,
                        fftw_complex *F0,
@@ -67,7 +67,7 @@ void sigma_clipping(float *image, long plane_pixels, double Nsigma, double *p0, 
 
 float scaling (float *image1, float *master, long plane_pixels, double p1_low, int *k);
 
-void gauss_blur(int Nx, int Ny, float* img, float *img_out, float sgm);
+void gauss_blur(int i, int N, int Nx, int Ny, float* img, float *img_out, float sgm);
 
 int timeval_subtract (double *result, struct timeval *x, struct timeval *y);
 
