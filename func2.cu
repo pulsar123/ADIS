@@ -450,3 +450,130 @@ void find_kernel_parameters(int Jx, int Jy, float MQ, int Nx, int Ny, dim3 *Grid
 	return;
 }	
 /* ------------------------------------------------ */
+	void cluster_analysis(struct List *list, unsigned int Pixel_counter, int *Cluster_index)
+	/* Carrying out cluster analysis in 4D on list.
+	Output: Cluster_index vector containing cluster associations for each pixel.
+	*/
+	{
+		int *members = (int *)malloc(Pixel_counter*sizeof(int));
+		int *next_members = (int *)malloc(Pixel_counter*sizeof(int));
+		
+		for (int i=0; i<Pixel_counter; i++)
+		{
+			Cluster_index[i] = -1; // Initially no cluster is assigned
+		}
+		
+		int i_max, del, pixel_is_neighbour, N_next;
+		int counter = -1;
+		
+		// Outer (cluster) loop: 
+		do
+		{
+			// Finding the brightest pixel for the next cluster
+			float p_max = -1e30;
+			i_max = -1;
+			for (int i=0; i<Pixel_counter; i++)
+			{
+				float p = list[i].p;
+				if (Cluster_index[i]==-1 && p>p_max)
+				{
+					p_max = p;
+					i_max = i;
+				}
+			}
+			
+			if (i_max == -1)
+				break;  // We ran out of unassigned pixels
+			
+			counter++;  // Incrementing the cluster counter
+			Cluster_index[i_max] = counter;
+			
+			// Initial list of cluster members contains only the brightest pixel:
+			members[0] = i_max;			
+			int N_members = 1;
+			
+			// The while loop to go over iterations of members
+			do
+			{
+				N_next = 0;
+				// Finding all cluster members iteratively
+				for (int i=0; i<Pixel_counter; i++)
+				{
+					if (Cluster_index[i] == -1)
+					{
+						pixel_is_neighbour = 0;
+						for (int j=0; j<N_members; j++)
+						{
+							// Computing the closeness parameter
+							int cl = 0;
+							
+							del = abs(list[members[j]].Jx-list[i].Jx);
+							if (del < 2)
+								cl = cl + del;
+							else
+								continue;
+								
+							del = abs(list[members[j]].Jy-list[i].Jy);
+							if (del < 2)
+								cl = cl + del;
+							else
+								continue;
+								
+							del = abs(list[members[j]].ix-list[i].ix);
+							if (del < 2)
+								cl = cl + del;
+							else
+								continue;
+								
+							del = abs(list[members[j]].iy-list[i].iy);
+							if (del < 2)
+								cl = cl + del;
+							else
+								continue;
+								
+							// Accepting the pixel as the new cluster member if it's close enough:
+							if (cl>0 && cl <= CL_MAX)
+							{
+								pixel_is_neighbour = 1;
+//								printf("Neigh: %d, %d %d %d %d %f\n",counter,list[i].Jx,list[i].Jy,list[i].ix,list[i].iy,list[i].p);
+								break;
+							}											
+						}
+						
+						if (pixel_is_neighbour == 1)
+						{							
+							Cluster_index[i] = counter;
+							N_next++;
+							next_members[N_next-1] = i;												
+						}										
+					}
+				}
+				
+				// Copying the next_members list to current members list:
+				if (N_next > 0)
+				{
+					N_members = N_next;
+					for (int j=0; j<N_members; j++)
+					{
+						members[j] = next_members[j];
+					}
+				}			
+			}
+			while(N_next > 0);
+			
+			printf("Found cluster %d\n", counter);
+			
+		}
+		while(i_max != -1);
+		
+		printf("Found %d clusters\n", counter+1);
+
+		if (counter > -1)
+		{
+		}
+		
+		return;
+		
+	}
+
+

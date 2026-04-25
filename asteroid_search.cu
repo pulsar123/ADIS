@@ -153,7 +153,7 @@ int main(int argc, char **argv)
 		
 	} // i_image loop
 
-exit(0);
+//exit(0);
 
 #ifndef TEST
 	// Normalizing the time shift for the last image to 1:
@@ -180,7 +180,7 @@ exit(0);
 	
 	// The motion vector space is between radii RMIN and RMAX (both are in MQ units)
 	// RMIN and RMAX should come as command line arguments
-	int RMIN = 50;
+	int RMIN = 1;
 	int RMAX = 500;
 	
 	// RMAX is limited by the image diagonal length (distance between the farthest tiles):
@@ -194,7 +194,7 @@ exit(0);
 	
 	// Minimum pixel brightness (in master image std units) to qualify for a detection
 	// Should be input parameter:  25, 5.0
-	float p_min_std = 1.75;
+	float p_min_std = 1.5;
 	
 	// Master image std (should come from FITS headers, or command line) 0.0028, 3.722e-4
 	float std_master = 3.722e-4;
@@ -282,13 +282,17 @@ exit(0);
 			h_list[imax].Jx, h_list[imax].Jy, h_list[imax].ix, h_list[imax].iy, h_list[imax].p,
 			h_list[imax].p/(std_master*N_images));
 			
+			int *Cluster_index = (int *)malloc(h_Pixel_counter*sizeof(int));			
+			cluster_analysis(h_list, h_Pixel_counter, Cluster_index);
+			
 			FILE *fp = fopen("list.dat", "w");
 			for (int i=0; i<h_Pixel_counter; i++)
 			{
-				fprintf(fp, "%d %d %d %d %f\n", h_list[i].Jx, h_list[i].Jy, h_list[i].ix, h_list[i].iy,
-				h_list[i].p/(std_master*N_images));
+				fprintf(fp, "%d %d %d %d %f %d\n", h_list[i].Jx, h_list[i].Jy, h_list[i].ix, h_list[i].iy,
+				h_list[i].p/(std_master*N_images), Cluster_index[i]);
 			}
 			fclose(fp);
+			free(Cluster_index);
 
 			find_kernel_parameters(h_list[imax].Jx, h_list[imax].Jy, MQ, Nx, Ny, &Grid_size, &Ix1, &Iy1);
 

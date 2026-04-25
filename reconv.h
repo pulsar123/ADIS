@@ -75,6 +75,7 @@ void dump_fits (int Nx, int Ny, int Nc, float *img, const char *name);
 
 void highpass_filter(const float *input, float *output,
                      int rows, int cols, double cutoff);
+					 
 
 #ifdef _OPENMP
 void init_all_locks();
