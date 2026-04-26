@@ -39,6 +39,9 @@ int main(int argc, char **argv)
 	}
 	
 	Is_GPU_present();
+	size_t free_mem, total_mem;
+	cudaMemGetInfo(&free_mem, &total_mem);
+	printf("GPU memory: Free: %f GB, Total: %f GB\n\n", (float)free_mem/(1024*1024*1024), (float)total_mem/(1024*1024*1024));		
 	
 	int N_images = argc - 1;
 	
@@ -49,13 +52,20 @@ int main(int argc, char **argv)
 
 	float *h_image1 = NULL;
 	float *h_dt = NULL;
-//	ERR( cudaMallocHost(&h_dt, N_images*sizeof(float*)) )
+	
+	#ifdef MALLOCHOST	
+	ERR( cudaMallocHost(&h_dt, N_images*sizeof(float*)) )
+	#else	
 	h_dt = (float *)malloc(N_images*sizeof(float*));
+	#endif
+	
 	float *d_dt = NULL;
 	ERR( cudaMalloc(&d_dt, N_images*sizeof(float*)) )
 	
 	float sgm_Gauss = FWHM / sqrt(8*log(2.0));
 	printf("sgm_Gauss = %f\n", sgm_Gauss);
+
+	gettimeofday (&tdr2, NULL);  		
 	
 	// Reading input FITS images one by one, using cudaMemcpyAsync to do concurrent copying to the GPU
 	for (int i_image=0; i_image<N_images; i_image++)
@@ -122,21 +132,19 @@ int main(int argc, char **argv)
 		// Background model has these many tiles along each dimension:
 		int NTx = 5;
 		int NTy = (int)((float)NTx / (float)Nx * (float)Ny + 0.5);
-		printf("Background model: %d x %d tiles, %d x %d pixels each\n", NTy, NTx, Ny/NTy, Nx/NTx);
+//		printf("Background model: %d x %d tiles, %d x %d pixels each\n", NTy, NTx, Ny/NTy, Nx/NTx);
 		subtract_background(i_image, buf0, Nx, Ny, NTx, NTy);
 		
-		gettimeofday (&tdr2, NULL);  		
 		gauss_blur(i_image, N_images, Nx, Ny, buf0, buf0, sgm_Gauss);
-		gettimeofday (&tdr3, NULL);  
-		tdr = tdr2;
-		timeval_subtract (&restime, &tdr3, &tdr);
-		printf("Convolution time: %e\n", restime);
-		
+
 //		dump_fits(Nx, Ny, 1, buf0, "image.fits");
 		
 		if (i_image == 0)
-//			ERR( cudaMallocHost(&h_image1, sizeof(float)*Npix) )
+			#ifdef MALLOCHOST
+			ERR( cudaMallocHost(&h_image1, sizeof(float)*Npix) )
+			#else
 			h_image1 = (float *)malloc(sizeof(float)*Npix);
+			#endif
 		
 		rebin(i_image, buf0, &Nx, &Ny, &Npix, &h_image1);
 		
@@ -144,7 +152,19 @@ int main(int argc, char **argv)
 		// This is the host-device sync point
 		if (cudaMallocPitch(&h_image[i_image], &pitch, (size_t)(Ny*sizeof(float)), Nx))
 			printf("Error in cudaMallocPitch!\n");
-		printf("Nx=%d Ny=%d pitch=%d\n", Nx, Ny, (int)(pitch/sizeof(float)));
+		printf("Nx=%d, Ny=%d, pitch=%d, image size=%f GB\n", Nx, Ny, (int)(pitch/sizeof(float)),
+		(float)(pitch*Nx)/(1024*1024*1024));
+		
+		size_t free_mem1, total_mem1;
+		cudaMemGetInfo(&free_mem1, &total_mem1);
+		if ((N_images-1)*pitch*Nx > free_mem1)
+		{
+			printf("\nNot enough of free GPU memory to fit all the images!\n");
+			printf("Maximum %d images can be loaded\n", (int)((float)free_mem/(float)(pitch*Nx)));
+			printf("Exiting\n\n");
+			exit(1);
+		}
+
 				
 		// The memcopy command is asynchronous, and will run concurrently with the next host operation - 
 		// reading the next image, and preprocessing it		
@@ -152,6 +172,12 @@ int main(int argc, char **argv)
 			printf("Error in cudaMemcpy!\n");		
 		
 	} // i_image loop
+
+	gettimeofday (&tdr3, NULL);  
+	tdr = tdr2;
+	timeval_subtract (&restime, &tdr3, &tdr);
+	printf("\nImage processing time, per image: %e seconds\n\n", restime/N_images);
+		
 
 //exit(0);
 
@@ -205,8 +231,13 @@ int main(int argc, char **argv)
 	float *d_test_image = NULL;
 	ERR( cudaMallocPitch(&d_test_image, &pitch, (size_t)(Ny*sizeof(float)), Nx) )
 	float *h_test_image = NULL;
-//	ERR( cudaMallocHost(&h_test_image, (size_t)(Nx*Ny*sizeof(float))) )
+
+	#ifdef MALLOCHOST
+	ERR( cudaMallocHost(&h_test_image, (size_t)(Nx*Ny*sizeof(float))) )
+	#else
 	h_test_image = (float *)malloc(Npix*sizeof(float));
+	#endif
+
 	struct List *h_list = NULL;
 	h_list = (struct List *)malloc(MAX_PIXELS*sizeof(struct List));
 	struct List *d_list = NULL;
@@ -216,11 +247,14 @@ int main(int argc, char **argv)
 	ERR (cudaMalloc(&d_Pixel_counter, sizeof(unsigned int)))
 	unsigned int h_Pixel_counter = 0;
 	cudaMemcpy(d_Pixel_counter, &h_Pixel_counter, sizeof(unsigned int), cudaMemcpyHostToDevice);
-
 	
+	cudaMemGetInfo(&free_mem, &total_mem);
+	printf("GPU memory: Free: %f GB, Total: %f GB\n\n", (float)free_mem/(1024*1024*1024), (float)total_mem/(1024*1024*1024));		
+
 	cudaDeviceSynchronize();
     gettimeofday (&tdr0, NULL);  
-	
+		
+//--------------  The longest part of the code: image stacking for differnt motion vectors on GPU -----	
 	int Jcount = 0;
 	dim3 Grid_size;
 	dim3 Block_size(32,32);
@@ -246,8 +280,8 @@ int main(int argc, char **argv)
 				Jcount++;
 			}			
 		}
-		}
-
+		}		
+//-------------------------------------------------------------------------------------------------------		
 	ERR( cudaDeviceSynchronize() )
     gettimeofday (&tdr1, NULL);  
     tdr = tdr0;

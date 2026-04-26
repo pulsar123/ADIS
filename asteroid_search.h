@@ -14,6 +14,8 @@
 
 //#define TEST
 
+#define MALLOCHOST  // If defined, use cudaMlalocHost in place of malloc
+
 #ifdef _OPENMP
   // OpenMP is enabled
   #include <omp.h>
