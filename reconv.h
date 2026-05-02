@@ -14,6 +14,19 @@
   #include <omp.h>
 #endif
 
+// CLoseness parameter for cluster members during cluster analysis
+// Possible range : 1...4
+// 1: the tightest clusters possible (only one out of 4 dimensions differs by 1)
+// 4: the loosest clusters possible (all 4 dimensions may differ by 1)
+// 1 is the best when minimizing the chance that two closely located clusters merge into one
+// 4 is the best when minimizing the chance that the halo of pixels from another cluster
+// is mistakenly assigned to a new cluster
+#define CL_MAX 4
+
+// Mask test value:
+#define MASK -100.0
+#define MASK0 (MASK-1)
+
 #define IDX(x,y,Ny) ((x)*(Ny) + (y))
 
 #ifdef __cplusplus
@@ -75,6 +88,18 @@ void dump_fits (int Nx, int Ny, int Nc, float *img, const char *name);
 
 void highpass_filter(const float *input, float *output,
                      int rows, int cols, double cutoff);
+
+void image_bw(float *image, long Npix, int Nc);
+
+void crop(float *buf0, int *Nx, int *Ny, long *Npix, float crop_fraction);
+
+void rebin(int i_image, float *buf0, int *Nx, int *Ny, long *Npix, float** h_image);
+
+void subtract_background(int i_image, float *img, int Nx, int Ny, int NTx, int NTy);
+
+int date2mjd (int yr, int mn, int dy);
+
+
 					 
 
 #ifdef _OPENMP

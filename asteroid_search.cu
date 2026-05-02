@@ -135,7 +135,7 @@ int main(int argc, char **argv)
 //		printf("Background model: %d x %d tiles, %d x %d pixels each\n", NTy, NTx, Ny/NTy, Nx/NTx);
 		subtract_background(i_image, buf0, Nx, Ny, NTx, NTy);
 		
-		gauss_blur(i_image, N_images, Nx, Ny, buf0, buf0, sgm_Gauss);
+//!!!		gauss_blur(i_image, N_images, Nx, Ny, buf0, buf0, sgm_Gauss);
 
 //		dump_fits(Nx, Ny, 1, buf0, "image.fits");
 		
@@ -155,16 +155,18 @@ int main(int argc, char **argv)
 		printf("Nx=%d, Ny=%d, pitch=%d, image size=%f GB\n", Nx, Ny, (int)(pitch/sizeof(float)),
 		(float)(pitch*Nx)/(1024*1024*1024));
 		
-		size_t free_mem1, total_mem1;
-		cudaMemGetInfo(&free_mem1, &total_mem1);
-		if ((N_images-1)*pitch*Nx > free_mem1)
+		if (i_image == 0)
 		{
-			printf("\nNot enough of free GPU memory to fit all the images!\n");
-			printf("Maximum %d images can be loaded\n", (int)((float)free_mem/(float)(pitch*Nx)));
-			printf("Exiting\n\n");
-			exit(1);
+			size_t free_mem1, total_mem1;
+			cudaMemGetInfo(&free_mem1, &total_mem1);
+			if ((N_images-1)*pitch*Nx > free_mem1)
+			{
+				printf("\nNot enough of free GPU memory to fit all the images!\n");
+				printf("Maximum %d images can be loaded\n", (int)((float)free_mem/(float)(pitch*Nx)));
+				printf("Exiting\n\n");
+				exit(1);
+			}
 		}
-
 				
 		// The memcopy command is asynchronous, and will run concurrently with the next host operation - 
 		// reading the next image, and preprocessing it		
@@ -206,8 +208,8 @@ int main(int argc, char **argv)
 	
 	// The motion vector space is between radii RMIN and RMAX (both are in MQ units)
 	// RMIN and RMAX should come as command line arguments
-	int RMIN = 1;
-	int RMAX = 500;
+	int RMIN = 90;
+	int RMAX = 200;
 	
 	// RMAX is limited by the image diagonal length (distance between the farthest tiles):
 	int diag = floor(NB * sqrt(pow(Nxb-1,2) + pow(Nyb-1,2)) / MQ);
@@ -220,13 +222,13 @@ int main(int argc, char **argv)
 	
 	// Minimum pixel brightness (in master image std units) to qualify for a detection
 	// Should be input parameter:  25, 5.0
-	float p_min_std = 1.5;
+	float p_min_std = 15;
 	
 	// Master image std (should come from FITS headers, or command line) 0.0028, 3.722e-4
-	float std_master = 3.722e-4;
+//	float std_master = 3.722e-4;
 	
 	// Signal detection theshold for image stacks (assuming summation stacking):
-	float p_min = p_min_std * std_master * N_images;
+//	float p_min = p_min_std * std_master * N_images;
 
 	float *d_test_image = NULL;
 	ERR( cudaMallocPitch(&d_test_image, &pitch, (size_t)(Ny*sizeof(float)), Nx) )
@@ -249,16 +251,42 @@ int main(int argc, char **argv)
 	cudaMemcpy(d_Pixel_counter, &h_Pixel_counter, sizeof(unsigned int), cudaMemcpyHostToDevice);
 	
 	cudaMemGetInfo(&free_mem, &total_mem);
-	printf("GPU memory: Free: %f GB, Total: %f GB\n\n", (float)free_mem/(1024*1024*1024), (float)total_mem/(1024*1024*1024));		
+	printf("GPU memory: Free: %f GB, Total: %f GB\n\n", (float)free_mem/(1024*1024*1024), (float)total_mem/(1024*1024*1024));
+	
+	// Computing the value of sgm for a zero-shift stack
+	dim3 Block_size(32,32);
+	dim3 Grid_size;
+	int Ix1, Iy1;
+	find_kernel_parameters(0, 0, MQ, Nx, Ny, &Grid_size, &Ix1, &Iy1);
+	float p_min = 1e30;
+	// Zero-offset stacking:
+	motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,0,0,MQ,p_min,d_dt,d_test_image,d_list,1,d_Pixel_counter,Nx,Ny);
+	
+	/*
+	dim3 Grid_size2((Nx+31)/32, (Ny+31)/32);
+	subtract_master_image<<<Grid_size2, Block_size>>>(d_image,N_images,pitch,Ix1,Iy1,d_test_image,Nx,Ny);
+	
+	int XX=10; int YY=10;
+	find_kernel_parameters(XX, YY, MQ, Nx, Ny, &Grid_size, &Ix1, &Iy1);
+	motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,XX,YY,MQ,p_min,d_dt,d_test_image,d_list,1,d_Pixel_counter,Nx,Ny);
+	*/
+	ERR( cudaMemcpy2D(h_test_image, Ny*sizeof(float), d_test_image, pitch, Ny*sizeof(float), Nx, cudaMemcpyDeviceToHost) )
+		
+	double p0, sgm;
+	long Npix2;
+	int kk;
+	sigma_clipping(h_test_image, Npix, 3.0, &p0, &sgm, &Npix2, &kk);
+	dump_fits(Nx, Ny, 1, h_test_image, "zero_shift.fits");
+	p_min = p_min_std * sgm;
+	printf("\n Zero shift stack: p=%e, sgm=%e, p_min=%e\n\n", p0, sgm, p_min);
+	exit(0);
+	
 
 	cudaDeviceSynchronize();
     gettimeofday (&tdr0, NULL);  
 		
-//--------------  The longest part of the code: image stacking for differnt motion vectors on GPU -----	
+//--------------  The longest part of the code: image stacking for different motion vectors on GPU -----	
 	int Jcount = 0;
-	dim3 Grid_size;
-	dim3 Block_size(32,32);
-	int Ix1, Iy1;
 	// Double loop going over all possible motion vectors:
 	// Jx, Jy are in MQ units
 	for (int Jx=-RMAX; Jx<=RMAX; Jx++)		
@@ -314,7 +342,7 @@ int main(int argc, char **argv)
 			}
 			printf("Motion vector: (%d, %d); pixel coords: (%d, %d); p=%f (%f std)\n",
 			h_list[imax].Jx, h_list[imax].Jy, h_list[imax].ix, h_list[imax].iy, h_list[imax].p,
-			h_list[imax].p/(std_master*N_images));
+			h_list[imax].p/sgm);
 			
 			int *Cluster_index = (int *)malloc(h_Pixel_counter*sizeof(int));			
 			cluster_analysis(h_list, h_Pixel_counter, Cluster_index);
@@ -323,7 +351,7 @@ int main(int argc, char **argv)
 			for (int i=0; i<h_Pixel_counter; i++)
 			{
 				fprintf(fp, "%d %d %d %d %f %d\n", h_list[i].Jx, h_list[i].Jy, h_list[i].ix, h_list[i].iy,
-				h_list[i].p/(std_master*N_images), Cluster_index[i]);
+				h_list[i].p/sgm, Cluster_index[i]);
 			}
 			fclose(fp);
 			free(Cluster_index);
@@ -340,12 +368,18 @@ int main(int argc, char **argv)
 		}
 	}
 
-	free(buf0);	
-//	ERR( cudaFreeHost(h_image) )
+	#ifdef MALLOCHOST
+	ERR( cudaFreeHost(h_image1) )
+	ERR( cudaFreeHost(h_dt) )
+	ERR( cudaFreeHost(h_test_image) )
+	#else
 	free(h_image1);
-	free(h_image);
-//	ERR( cudaFreeHost(h_test_image) )
+	free(h_dt);
 	free(h_test_image);
+	#endif
+
+	free(h_image);
+	free(buf0);	
 
 	return 0;
 }
