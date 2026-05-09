@@ -25,6 +25,15 @@ int main(int argc, char **argv)
 	double mjd, mjd0;
 	int year, month, day, hour, minute;
     double second, exposure;	
+
+	// The motion vector space is between radii RMIN and RMAX (both are in MQ units)
+	// RMIN and RMAX should come as command line arguments
+	int RMIN = 20;
+	int RMAX = 500;
+
+	// Minimum pixel brightness (in master image std units) to qualify for a detection
+	// Should be input parameter:  25, 5.0
+	float p_min_std = 25;
 	
 	float FWHM = 7.7; // Needs to be provided via images' FITS headers; 7.7
 
@@ -126,8 +135,8 @@ int main(int argc, char **argv)
 
 		image_bw(buf0, Npix, Nc);  // Turn the image into black and white
 
-		float crop_fraction = 1.0;
-		crop(buf0, &Nx, &Ny, &Npix, crop_fraction);
+//		float crop_fraction = 1.0;
+//		crop(buf0, &Nx, &Ny, &Npix, crop_fraction);
 
 		// Background model has these many tiles along each dimension:
 		int NTx = 5;
@@ -135,7 +144,7 @@ int main(int argc, char **argv)
 //		printf("Background model: %d x %d tiles, %d x %d pixels each\n", NTy, NTx, Ny/NTy, Nx/NTx);
 		subtract_background(i_image, buf0, Nx, Ny, NTx, NTy);
 		
-//!!!		gauss_blur(i_image, N_images, Nx, Ny, buf0, buf0, sgm_Gauss);
+		gauss_blur(i_image, N_images, Nx, Ny, buf0, buf0, sgm_Gauss);
 
 //		dump_fits(Nx, Ny, 1, buf0, "image.fits");
 		
@@ -206,10 +215,6 @@ int main(int argc, char **argv)
 	// The mesh step (Motion Quantum) in pixels:
 	float MQ = Step * FWHM; 
 	
-	// The motion vector space is between radii RMIN and RMAX (both are in MQ units)
-	// RMIN and RMAX should come as command line arguments
-	int RMIN = 90;
-	int RMAX = 200;
 	
 	// RMAX is limited by the image diagonal length (distance between the farthest tiles):
 	int diag = floor(NB * sqrt(pow(Nxb-1,2) + pow(Nyb-1,2)) / MQ);
@@ -220,9 +225,6 @@ int main(int argc, char **argv)
 	if (RMIN < 0)
 		RMIN = 0;
 	
-	// Minimum pixel brightness (in master image std units) to qualify for a detection
-	// Should be input parameter:  25, 5.0
-	float p_min_std = 15;
 	
 	// Master image std (should come from FITS headers, or command line) 0.0028, 3.722e-4
 //	float std_master = 3.722e-4;
@@ -253,6 +255,7 @@ int main(int argc, char **argv)
 	cudaMemGetInfo(&free_mem, &total_mem);
 	printf("GPU memory: Free: %f GB, Total: %f GB\n\n", (float)free_mem/(1024*1024*1024), (float)total_mem/(1024*1024*1024));
 	
+	
 	// Computing the value of sgm for a zero-shift stack
 	dim3 Block_size(32,32);
 	dim3 Grid_size;
@@ -262,14 +265,14 @@ int main(int argc, char **argv)
 	// Zero-offset stacking:
 	motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,0,0,MQ,p_min,d_dt,d_test_image,d_list,1,d_Pixel_counter,Nx,Ny);
 	
-	/*
-	dim3 Grid_size2((Nx+31)/32, (Ny+31)/32);
-	subtract_master_image<<<Grid_size2, Block_size>>>(d_image,N_images,pitch,Ix1,Iy1,d_test_image,Nx,Ny);
 	
-	int XX=10; int YY=10;
+//	dim3 Grid_size2((Nx+31)/32, (Ny+31)/32);
+//	subtract_master_image<<<Grid_size2, Block_size>>>(d_image,N_images,pitch,Ix1,Iy1,d_test_image,Nx,Ny);
+/*	
+	int XX=40; int YY=40;
 	find_kernel_parameters(XX, YY, MQ, Nx, Ny, &Grid_size, &Ix1, &Iy1);
 	motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,XX,YY,MQ,p_min,d_dt,d_test_image,d_list,1,d_Pixel_counter,Nx,Ny);
-	*/
+*/	
 	ERR( cudaMemcpy2D(h_test_image, Ny*sizeof(float), d_test_image, pitch, Ny*sizeof(float), Nx, cudaMemcpyDeviceToHost) )
 		
 	double p0, sgm;
@@ -277,10 +280,35 @@ int main(int argc, char **argv)
 	int kk;
 	sigma_clipping(h_test_image, Npix, 3.0, &p0, &sgm, &Npix2, &kk);
 	dump_fits(Nx, Ny, 1, h_test_image, "zero_shift.fits");
-	p_min = p_min_std * sgm;
-	printf("\n Zero shift stack: p=%e, sgm=%e, p_min=%e\n\n", p0, sgm, p_min);
+	printf("\n Zero shift stack: p=%e, sgm=%e\n\n", p0, sgm);
+	long *hist = (long *)malloc(sizeof(long)*(BIN_MAX-BIN_MIN+1));
+	compute_histogram(h_test_image, Npix, sgm, &p_min_std, hist);
+	printf("(0,0) vector: p_min_std=%f\n", p_min_std);
+
+
+	find_kernel_parameters(RMIN, RMIN, MQ, Nx, Ny, &Grid_size, &Ix1, &Iy1);
+	p_min = 1e30;
+	motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,RMIN,RMIN,MQ,p_min,d_dt,d_test_image,d_list,1,d_Pixel_counter,Nx,Ny);
+	ERR( cudaMemcpy2D(h_test_image, Ny*sizeof(float), d_test_image, pitch, Ny*sizeof(float), Nx, cudaMemcpyDeviceToHost) )
+	sigma_clipping(h_test_image, Npix, 3.0, &p0, &sgm, &Npix2, &kk);
+	printf("\n Rmin shift stack: p=%e, sgm=%e\n\n", p0, sgm);
+	compute_histogram(h_test_image, Npix, sgm, &p_min_std, hist);
+	printf("(Rmin,Rmin) vector: p_min_std=%f\n", p_min_std);
+
+	find_kernel_parameters(RMAX, RMAX, MQ, Nx, Ny, &Grid_size, &Ix1, &Iy1);
+	p_min = 1e30;
+	motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,RMAX,RMAX,MQ,p_min,d_dt,d_test_image,d_list,1,d_Pixel_counter,Nx,Ny);
+	ERR( cudaMemcpy2D(h_test_image, Ny*sizeof(float), d_test_image, pitch, Ny*sizeof(float), Nx, cudaMemcpyDeviceToHost) )
+	sigma_clipping(h_test_image, Npix, 3.0, &p0, &sgm, &Npix2, &kk);
+	printf("\n Rmax shift stack: p=%e, sgm=%e\n\n", p0, sgm);
+	compute_histogram(h_test_image, Npix, sgm, &p_min_std, hist);
+	printf("(Rmax,Rmax) vector: p_min_std=%f\n", p_min_std);
+
+	free(hist);
 	exit(0);
-	
+
+	p_min = p_min_std * sgm;
+
 
 	cudaDeviceSynchronize();
     gettimeofday (&tdr0, NULL);  
@@ -345,8 +373,24 @@ int main(int argc, char **argv)
 			h_list[imax].p/sgm);
 			
 			int *Cluster_index = (int *)malloc(h_Pixel_counter*sizeof(int));			
-			cluster_analysis(h_list, h_Pixel_counter, Cluster_index);
 			
+			cudaDeviceSynchronize();
+			gettimeofday (&tdr0, NULL);  
+			cluster_analysis(h_list, h_Pixel_counter, Cluster_index);
+			cudaDeviceSynchronize();
+			gettimeofday (&tdr1, NULL);  			
+			cluster_analysis_cuda(h_list, h_Pixel_counter, Cluster_index);
+			cudaDeviceSynchronize();
+			gettimeofday (&tdr2, NULL);  
+
+			tdr = tdr0;
+			timeval_subtract (&restime, &tdr1, &tdr);
+			printf("Cluster analysis CPU: %e s\n", restime);
+			tdr = tdr1;
+			timeval_subtract (&restime, &tdr2, &tdr);
+			printf("Cluster analysis GPU: %e s\n", restime);
+			
+
 			FILE *fp = fopen("list.dat", "w");
 			for (int i=0; i<h_Pixel_counter; i++)
 			{

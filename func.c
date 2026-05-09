@@ -649,7 +649,7 @@ void image_bw(float *image, long Npix, int Nc)
 			// The colors are RGB; storing the B&W image into the red channel
 			image[i] = 0.25*(r + 2*g + b);
 			else
-			image[i] = MASK - 1;
+			image[i] = MASK0;
 	}
 
 	return;
@@ -903,5 +903,200 @@ int date2mjd (int yr, int mn, int dy) {
 
   return(rv);
 }
+
+/* ------------------------------------------------ */
+/*
+	void cluster_analysis_2D(int i_image, float *img, int Nx, int Ny, )
+	// Carrying out cluster analysis in 2D on img. Finding all bright masked stars.
+	Output: 
+	//
+	{
+		int *members = (int *)malloc(Nx*Ny*sizeof(int));
+		int *next_members = (int *)malloc(Nx*Ny*sizeof(int));
+		
+		long Npix = Nx * Ny;
+
+		int i_max, del, pixel_is_neighbour, N_next;
+		int counter = -1;
+		
+		int MEMBER = -200;
+		int MEMBER0 = -201;
+		
+		int ix = {0, 0, -1, 1};
+		int iy = {-1, 1, 0, 0};
+		
+		for (long i=0; i<Npix; i++)
+		{
+			if (img[i]<MASK && img[i]>MEMBER)
+				// We found a masked pixel which is not a part of a cluster yet
+				{					
+					counter++;  // Incrementing the cluster counter
+					img[i] = MEMBER0;
+
+					// Initial list of cluster members contains only the first pixel:
+					members[0] = i;			
+					int N_members = 1;
+					
+					while loop
+
+					N_next = 0;
+					
+					for (int j=0; j<N_members; j++)
+					{
+						int ix0 = members[i] / Ny;
+						int iy0 = members[i] % Ny;
+						for (int k=0; k<4; k++)
+						// Cycle over 4 neighbours
+						{
+							int ix1 = ix0 + ix[k];
+							int iy1 = iy0 + iy[k];
+							if (ix1>=0 && ix1<=Nx && iy1>=0 && iy1<=Ny) 
+							{
+								int im = ix1*Ny+iy1;
+								if (img[im]<MASK && img[im]>MEMBER)
+								// We found a neigbour which is masked and not in a cluster yet
+								{
+									N_next++;
+									next_members[N_next-1] = im;
+									N_members++;
+									members[N_members-1] = im;
+									img[im] = MEMBER0;
+								}
+							}
+						}
+					}
+						
+						
+			
+			// The while loop to go over iterations of members
+			do
+			{
+				N_next = 0;
+				// Finding all cluster members iteratively
+				for (int i=0; i<Pixel_counter; i++)
+				{
+					if (Cluster_index[i] == -1)
+					{
+						pixel_is_neighbour = 0;
+						for (int j=0; j<N_members; j++)
+						{
+							// Computing the closeness parameter
+							int cl = 0;
+							
+							del = abs(list[members[j]].Jx-list[i].Jx);
+							if (del < 2)
+								cl = cl + del;
+							else
+								continue;
+								
+							del = abs(list[members[j]].Jy-list[i].Jy);
+							if (del < 2)
+								cl = cl + del;
+							else
+								continue;
+								
+							del = abs(list[members[j]].ix-list[i].ix);
+							if (del < 2)
+								cl = cl + del;
+							else
+								continue;
+								
+							del = abs(list[members[j]].iy-list[i].iy);
+							if (del < 2)
+								cl = cl + del;
+							else
+								continue;
+								
+							// Accepting the pixel as the new cluster member if it's close enough:
+							if (cl>0 && cl <= CL_MAX)
+							{
+								pixel_is_neighbour = 1;
+								break;
+							}											
+						}
+						
+						if (pixel_is_neighbour == 1)
+						{							
+							Cluster_index[i] = counter;
+							N_next++;
+							next_members[N_next-1] = i;												
+						}										
+					}
+				}
+				
+				// Copying the next_members list to current members list:
+				if (N_next > 0)
+				{
+					N_members = N_next;
+					for (int j=0; j<N_members; j++)
+					{
+						members[j] = next_members[j];
+					}
+				}			
+			}
+			while(N_next > 0);
+			
+			printf("Found cluster %d\n", counter);
+			
+		}
+		while(i_max != -1);
+		
+		printf("Found %d clusters\n", counter+1);
+
+		return;
+		
+	}
+	*/
 /* ------------------------------------------------ */
 
+void compute_histogram(float *image, long Npix, float sgm, float *p_min_std, long *hist)
+{
+	// Initializing hist
+	for (int j=BIN_MIN; j<=BIN_MAX; j++)
+		hist[j-BIN_MIN] = 0;
+	
+	// Computing the histogram
+	for (long i=0; i<Npix; i++)
+	{
+		if (image[i] > MASK)
+		{
+			int bin = (int)(image[i]/sgm / D_SGM);
+	//		printf("%e %e %e\n", image[i], image[i]-p0, (image[i]-p0)/sgm);
+			if (bin >= BIN_MIN && bin < BIN_MAX)
+				hist[bin-BIN_MIN]++;
+			else if (bin >= BIN_MAX)
+				hist[bin-BIN_MIN]++;
+		}
+	}
+	
+/*
+	for (int j=BIN_MIN; j<=BIN_MAX; j++)
+		printf("%d %ld\n",j,hist[j-BIN_MIN]);
+	exit(0);
+	*/
+	
+	if (hist[BIN_MAX-BIN_MIN] > NPIX_MAX)
+	{
+		printf("hist > NPIX_MAX in compute_histogram!\n");
+		printf("Increase BIN_MAX or NPIX_MAX\n");
+		exit(1);
+	}
+		
+	// Finding the critical bin value when Npixels <= Npix_max
+	long Npixels = 0;
+	int j0 = 0;
+	for (int j=BIN_MAX; j>=BIN_MIN; j--)
+	{
+		long Npix1 = Npixels + hist[j-BIN_MIN];
+		if (Npix1 > NPIX_MAX)
+			break;
+		Npixels = Npix1;
+		j0 = j;
+	}
+	
+	printf("Npixels=%ld\n",Npixels);
+	*p_min_std = (j0+BIN_MIN)*D_SGM;
+	
+	return;
+	
+}

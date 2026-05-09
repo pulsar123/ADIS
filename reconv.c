@@ -411,7 +411,10 @@ int main(int argc, char **argv)
 		{
 			for (long i=0; i<plane_pixels; i++)
 			{
-				outbuf[c*plane_pixels + i] = outbias + img1[ithread*plane_pixels+i] - img0[ithread*plane_pixels+i];	
+				if (img0[ithread*plane_pixels+i]>MASK && img1[ithread*plane_pixels+i]>MASK)
+					outbuf[c*plane_pixels + i] = outbias + img1[ithread*plane_pixels+i] - img0[ithread*plane_pixels+i];	
+				else
+					outbuf[c*plane_pixels + i] = MASK0;
 			}
 		}
 		
@@ -480,6 +483,10 @@ int main(int argc, char **argv)
 		{
 			printf("\nExcluded pixels fraction: %f\n",(plane_pixels-Sinc)/plane_pixels);
 		}
+		
+		// Cluster analysis to find all masked areas
+		
+		
 	} // if not subtract_only
 
     fftw_free(F);

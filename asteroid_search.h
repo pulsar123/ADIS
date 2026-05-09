@@ -32,6 +32,8 @@
 // Maximum number of stored brighest pixels
 #define MAX_PIXELS 100000000
 
+__device__ int i_free_pixel;
+__device__ unsigned int d_N_members1; 
 
 struct List
 {
@@ -57,5 +59,10 @@ void find_kernel_parameters(int Jx, int Jy, float MQ, int Nx, int Ny, dim3 *Grid
 
 void cluster_analysis(struct List *list, unsigned int Pixel_counter, int *Cluster_index);
 
+void cluster_analysis_cuda(struct List *list, unsigned int Pixel_counter, int *h_cloud);
+
+__global__ void find_free_pixel(int *d_cloud, unsigned int Pixel_counter);
+
+__global__ void find_neighbours(int jj, int N_members, int N_cloud, unsigned int Pixel_counter, int ii, int *d_ix, int *d_iy, int *d_Jx, int *d_Jy, int *d_cloud, int *d_members);
 
 #endif
