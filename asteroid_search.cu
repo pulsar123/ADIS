@@ -28,8 +28,8 @@ int main(int argc, char **argv)
 
 	// The motion vector space is between radii RMIN and RMAX (both are in MQ units)
 	// RMIN and RMAX should come as command line arguments
-	int RMIN = 20;
-	int RMAX = 500;
+	int RMIN = 100;
+	int RMAX = 101;
 
 	// Minimum pixel brightness (in master image std units) to qualify for a detection
 	// Should be input parameter:  25, 5.0
@@ -305,9 +305,10 @@ int main(int argc, char **argv)
 	printf("(Rmax,Rmax) vector: p_min_std=%f\n", p_min_std);
 
 	free(hist);
-	exit(0);
+//	exit(0);
 
-	p_min = p_min_std * sgm;
+//	p_min = p_min_std * sgm;
+	p_min = 3.722e-4 * 3;
 
 
 	cudaDeviceSynchronize();
@@ -376,7 +377,7 @@ int main(int argc, char **argv)
 			
 			cudaDeviceSynchronize();
 			gettimeofday (&tdr0, NULL);  
-			cluster_analysis(h_list, h_Pixel_counter, Cluster_index);
+//			cluster_analysis(h_list, h_Pixel_counter, Cluster_index);
 			cudaDeviceSynchronize();
 			gettimeofday (&tdr1, NULL);  			
 			cluster_analysis_cuda(h_list, h_Pixel_counter, Cluster_index);

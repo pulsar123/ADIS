@@ -61,7 +61,9 @@ void cluster_analysis(struct List *list, unsigned int Pixel_counter, int *Cluste
 
 void cluster_analysis_cuda(struct List *list, unsigned int Pixel_counter, int *h_cloud);
 
-__global__ void find_free_pixel(int *d_cloud, unsigned int Pixel_counter);
+__global__ void init_d_cloud(int *d_cloud, unsigned int Pixel_counter);
+
+__global__ void find_free_pixel(int *d_cloud, unsigned int Pixel_counter, int N_cloud, int *d_members);
 
 __global__ void find_neighbours(int jj, int N_members, int N_cloud, unsigned int Pixel_counter, int ii, int *d_ix, int *d_iy, int *d_Jx, int *d_Jy, int *d_cloud, int *d_members);
 

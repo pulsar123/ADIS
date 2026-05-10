@@ -380,7 +380,7 @@ void find_kernel_parameters(int Jx, int Jy, float MQ, int Nx, int Ny, dim3 *Grid
 			}
 			while(N_next > 0);
 			
-			printf("Found cluster %d\n", counter);
+//			printf("Found cluster %d\n", counter);
 			
 		}
 		while(i_max != -1);
@@ -418,6 +418,14 @@ void find_kernel_parameters(int Jx, int Jy, float MQ, int Nx, int Ny, dim3 *Grid
 		int *d_members;
 		cudaMalloc(&d_members, Pixel_counter*sizeof(int));
 		
+		for (int i=0; i<Pixel_counter; i++)
+		{
+			h_ix[i] = list[i].ix;
+			h_iy[i] = list[i].iy;
+			h_Jx[i] = list[i].Jx;
+			h_Jy[i] = list[i].Jy;
+		}
+		
 		cudaMemcpy(d_ix, h_ix, Pixel_counter*sizeof(int), cudaMemcpyHostToDevice);
 		cudaMemcpy(d_iy, h_iy, Pixel_counter*sizeof(int), cudaMemcpyHostToDevice);
 		cudaMemcpy(d_Jx, h_Jx, Pixel_counter*sizeof(int), cudaMemcpyHostToDevice);
@@ -436,24 +444,31 @@ void find_kernel_parameters(int Jx, int Jy, float MQ, int Nx, int Ny, dim3 *Grid
 			Block_size = Block_size0;
 		int N_blocks = (Pixel_counter+Block_size-1)/Block_size;
 
-		
+		init_d_cloud<<<N_blocks,Block_size>>>(d_cloud, Pixel_counter);
+
 		do
 		{
 			// Pre-initializing i_free_pixel to -1
 			ii = -1;
 			cudaMemcpyToSymbol(i_free_pixel, &ii, sizeof(int), 0, cudaMemcpyHostToDevice);
-			cudaDeviceSynchronize();
+
+			N_cloud++;
 
 			// Finding a non-assigned pixel from the list - the start of the new cloud
 			// the result is in device variable i_free_pixel
-			find_free_pixel<<<N_blocks,Block_size>>>(d_cloud, Pixel_counter);
+			find_free_pixel<<<N_blocks,Block_size>>>(d_cloud, Pixel_counter, N_cloud, d_members);
+			
 			cudaMemcpyFromSymbol(&ii, i_free_pixel, sizeof(int), 0, cudaMemcpyDeviceToHost);
+//			cudaDeviceSynchronize();
 			if (ii == -1)
 				// No more clusters
-				break;
+				{
+					N_cloud--;
+					break;
+				}
 				
 			// We are starting a new cloud (with one pixel for now, with the index ii)
-			N_cloud++;
+//			printf("Cloud %d, %d\n", N_cloud, ii);
 			N_members = 1;
 			jj = 0;
 			
@@ -494,7 +509,18 @@ void find_kernel_parameters(int Jx, int Jy, float MQ, int Nx, int Ny, dim3 *Grid
 	}
 /* ------------------------------------------------ */
 
-__global__ void find_free_pixel(int *d_cloud, unsigned int Pixel_counter)
+__global__ void init_d_cloud(int *d_cloud, unsigned int Pixel_counter)
+{	
+	int i_pixel = threadIdx.x + blockIdx.x*blockDim.x;
+	
+	if (i_pixel >= Pixel_counter)
+		return;
+
+	d_cloud[i_pixel] = 0;
+}
+/* ------------------------------------------------ */
+
+__global__ void find_free_pixel(int *d_cloud, unsigned int Pixel_counter, int N_cloud, int *d_members)
 // The kernel to find a non-zero element in d_cloud, and store its index in the
 // device variable i_free_pixel, which needs to be pre-initialized to -1.
 {
@@ -508,7 +534,12 @@ __global__ void find_free_pixel(int *d_cloud, unsigned int Pixel_counter)
 	
 	if (d_cloud[i_pixel] == 0)
 	{
-		atomicCAS(&i_free_pixel, -1, i_pixel);
+		int old = atomicCAS(&i_free_pixel, -1, i_pixel);
+		if (old == -1)
+		{
+			d_cloud[i_pixel] = N_cloud;
+			d_members[0] = i_pixel;
+		}
 	}
 }
 
@@ -525,8 +556,14 @@ __global__ void find_neighbours(int jj, int N_members, int N_cloud, unsigned int
 	if (i >= Pixel_counter)
 		return;
 
+//	if (jj==0 && i==0)
+	//{
+//		d_cloud[ii] = N_cloud;
+//		d_members[0] = ii;
+	//}
+
 	// Skipping the pixels which have already been assigned to a cloud:
-	if (d_cloud[i] != -1)
+	if (d_cloud[i] > 0)
 		return;
 
 	int ix = d_ix[i];
@@ -536,7 +573,7 @@ __global__ void find_neighbours(int jj, int N_members, int N_cloud, unsigned int
 
 	bool inCloud = false;
 	int i0;
-
+	
 	// Loop over all freshely added members:
 	for (int j=0; j<N_members; j++)
 	{
@@ -555,10 +592,9 @@ __global__ void find_neighbours(int jj, int N_members, int N_cloud, unsigned int
 		if (dx<=1 && dy<=1 && dJx<=1 && dJy<=1)
 		{
 			// computing the closeness index
-			int S = dx + dy + dJx + dJy;
+			int cl = dx + dy + dJx + dJy;
 			// Cluster membership criterion:
-			if (S == 1)
-				// S==1 means that only one coordinate differs by 1: no diagonal members
+			if (cl>0 && cl<=CL_MAX)
 			{
 				// This pixel belongs to the current cloud
 				inCloud = true;
