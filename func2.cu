@@ -45,7 +45,7 @@ void fits_error(int status)
 	
 /* ------------------------------------------------ */
 	
-__global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch, int Ix1, int Iy1, int Jx, int Jy, float MQ, float p_min, float *d_dt, float *d_test_image, struct List *d_list, int save_image, unsigned int *d_Pixel_counter, int Nx, int Ny)
+__global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch, int Ix1, int Iy1, int Jx, int Jy, float MQ, float p_min, float *d_dt, float *d_test_image, int *d_ix, int *d_iy, int *d_Jx, int *d_Jy, float *d_p, int save_image, unsigned int *d_Pixel_counter, int Nx, int Ny)
 {
 	// The main compute kernel: searches for moving objects over all images,
 	// all allowed base image tiles, for the given motion vector (Jx,Jy) in MQ units
@@ -152,11 +152,11 @@ __global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch,
 			int ii = atomicInc(d_Pixel_counter, MAX_PIXELS);
 			if (ii < MAX_PIXELS)
 			{
-				d_list[ii].Jx = Jx;
-				d_list[ii].Jy = Jy;
-				d_list[ii].ix = ix;
-				d_list[ii].iy = iy;
-				d_list[ii].p = base_tile[jx][jy];
+				d_Jx[ii] = Jx;
+				d_Jy[ii] = Jy;
+				d_ix[ii] = ix;
+				d_iy[ii] = iy;
+				d_p[ii] = base_tile[jx][jy];
 			}
 		}
 	
@@ -270,7 +270,7 @@ void find_kernel_parameters(int Jx, int Jy, float MQ, int Nx, int Ny, dim3 *Grid
 	return;
 }	
 /* ------------------------------------------------ */
-	void cluster_analysis(struct List *list, unsigned int Pixel_counter, int *Cluster_index)
+	void cluster_analysis(int *h_ix, int *h_iy, int *h_Jx, int *h_Jy, float *h_p, unsigned int Pixel_counter, int *Cluster_index)
 	/* Carrying out cluster analysis in 4D on list.
 	Output: Cluster_index vector containing cluster associations for each pixel.
 	*/
@@ -294,7 +294,7 @@ void find_kernel_parameters(int Jx, int Jy, float MQ, int Nx, int Ny, dim3 *Grid
 			i_max = -1;
 			for (int i=0; i<Pixel_counter; i++)
 			{
-				float p = list[i].p;
+				float p = h_p[i];
 				if (Cluster_index[i]==-1 && p>p_max)
 				{
 					p_max = p;
@@ -327,25 +327,25 @@ void find_kernel_parameters(int Jx, int Jy, float MQ, int Nx, int Ny, dim3 *Grid
 							// Computing the closeness parameter
 							int cl = 0;
 							
-							del = abs(list[members[j]].Jx-list[i].Jx);
+							del = abs(h_Jx[members[j]]-h_Jx[i]);
 							if (del < 2)
 								cl = cl + del;
 							else
 								continue;
 								
-							del = abs(list[members[j]].Jy-list[i].Jy);
+							del = abs(h_Jy[members[j]]-h_Jy[i]);
 							if (del < 2)
 								cl = cl + del;
 							else
 								continue;
 								
-							del = abs(list[members[j]].ix-list[i].ix);
+							del = abs(h_ix[members[j]]-h_ix[i]);
 							if (del < 2)
 								cl = cl + del;
 							else
 								continue;
 								
-							del = abs(list[members[j]].iy-list[i].iy);
+							del = abs(h_iy[members[j]]-h_iy[i]);
 							if (del < 2)
 								cl = cl + del;
 							else
@@ -392,52 +392,26 @@ void find_kernel_parameters(int Jx, int Jy, float MQ, int Nx, int Ny, dim3 *Grid
 	}
 /* ------------------------------------------------ */
 
-	void cluster_analysis_cuda(struct List *list, unsigned int Pixel_counter, int *h_cloud)
+	void cluster_analysis_cuda(int *d_ix, int *d_iy, int *d_Jx, int *d_Jy, float *d_p, unsigned int Pixel_counter, int *h_cloud)
 	// Carrying out the cluster analysis on GPU
 	{
-		// We need to move from a structure to simple arrays to achieve coalesced memory access on GPU:		
-		int *h_ix;
-		cudaMallocHost(&h_ix, Pixel_counter*sizeof(int));
-		int *h_iy;
-		cudaMallocHost(&h_iy, Pixel_counter*sizeof(int));
-		int *h_Jx;
-		cudaMallocHost(&h_Jx, Pixel_counter*sizeof(int));
-		int *h_Jy;
-		cudaMallocHost(&h_Jy, Pixel_counter*sizeof(int));
 
-		int *d_ix;
-		cudaMalloc(&d_ix, Pixel_counter*sizeof(int));
-		int *d_iy;
-		cudaMalloc(&d_iy, Pixel_counter*sizeof(int));
-		int *d_Jx;
-		cudaMalloc(&d_Jx, Pixel_counter*sizeof(int));
-		int *d_Jy;
-		cudaMalloc(&d_Jy, Pixel_counter*sizeof(int));
 		int *d_cloud;
 		cudaMalloc(&d_cloud, Pixel_counter*sizeof(int));
 		int *d_members;
-		cudaMalloc(&d_members, Pixel_counter*sizeof(int));
+		cudaMalloc(&d_members, Pixel_counter*sizeof(int));		
+		int NN = Pixel_counter/FIND_MAXIMUM_BS * 2;
+		float *d_vec;
+		cudaMalloc(&d_vec, NN*sizeof(float));
+		int *d_index;
+		cudaMalloc(&d_index, NN*sizeof(int));
 		
-		for (int i=0; i<Pixel_counter; i++)
-		{
-			h_ix[i] = list[i].ix;
-			h_iy[i] = list[i].iy;
-			h_Jx[i] = list[i].Jx;
-			h_Jy[i] = list[i].Jy;
-		}
-		
-		cudaMemcpy(d_ix, h_ix, Pixel_counter*sizeof(int), cudaMemcpyHostToDevice);
-		cudaMemcpy(d_iy, h_iy, Pixel_counter*sizeof(int), cudaMemcpyHostToDevice);
-		cudaMemcpy(d_Jx, h_Jx, Pixel_counter*sizeof(int), cudaMemcpyHostToDevice);
-		cudaMemcpy(d_Jy, h_Jy, Pixel_counter*sizeof(int), cudaMemcpyHostToDevice);
-
 		int N_members;
 		unsigned int N_members1;
-		int ii, jj;
+		int ii;
 		
 		int Block_size;
-		int N_cloud = 0;
-		int Block_size0 = 512;
+		int Block_size0 = FIND_MAXIMUM_BS;
 		if (Pixel_counter < Block_size0)
 			Block_size = Pixel_counter;
 		else
@@ -446,31 +420,64 @@ void find_kernel_parameters(int Jx, int Jy, float MQ, int Nx, int Ny, dim3 *Grid
 
 		init_d_cloud<<<N_blocks,Block_size>>>(d_cloud, Pixel_counter);
 
+		int N_cloud = 0;
+		
+		// Cloud loop
 		do
 		{
-			// Pre-initializing i_free_pixel to -1
-			ii = -1;
-			cudaMemcpyToSymbol(i_free_pixel, &ii, sizeof(int), 0, cudaMemcpyHostToDevice);
-
 			N_cloud++;
 
-			// Finding a non-assigned pixel from the list - the start of the new cloud
-			// the result is in device variable i_free_pixel
-			find_free_pixel<<<N_blocks,Block_size>>>(d_cloud, Pixel_counter, N_cloud, d_members);
+			// Finding the brightest unassigned pixel - it will be the start of a new cloud
+			int step = 0;
+			int offset0;
+			int offset1;
+			float *d_vec1;
+			int N, N_blocks2, Block_size2;
+			do
+			{
+				if (step == 0)
+				{
+					d_vec1 = d_p;
+					N = Pixel_counter;
+					Block_size2 = Block_size;
+					N_blocks2 = N_blocks;
+					offset0 = 0;
+					offset1 = 0;
+				}
+				else
+				{
+					d_vec1 = &d_vec[offset0];
+					N = N_blocks2; // Each block from the previous iteration becomes a thread in the new iteration
+					offset1 = offset1 + N;
+					if (N < Block_size0)
+						Block_size2 = N;
+					else
+						Block_size2 = Block_size0;
+					N_blocks2 = (N+Block_size2-1)/Block_size2; // Updated number of blocks for the current iteration
+				}
+		printf("%d, %d, %d; %d %d\n", step,N_blocks2,Block_size2, offset0, offset1);
+				find_maximum<<<N_blocks2,Block_size2>>> (step, N, d_vec1, &d_index[offset0], d_cloud, &d_vec[offset1], &d_index[offset1], N_cloud, d_members);
+				
+				step++;
+				offset0 = offset1;
+			}
+			while(N_blocks2 > 1);
 			
-			cudaMemcpyFromSymbol(&ii, i_free_pixel, sizeof(int), 0, cudaMemcpyDeviceToHost);
-//			cudaDeviceSynchronize();
+			// 0-th element of d_members was initialized above in the last find_maximum iteration
+			cudaMemcpy(&ii, d_members, sizeof(int), cudaMemcpyDeviceToHost);
 			if (ii == -1)
 				// No more clusters
 				{
 					N_cloud--;
 					break;
 				}
+
+			printf("Cloud %d, brightest pixel=%d\n", N_cloud, ii);
 				
 			// We are starting a new cloud (with one pixel for now, with the index ii)
 //			printf("Cloud %d, %d\n", N_cloud, ii);
 			N_members = 1;
-			jj = 0;
+//			jj = 0;
 			
 			do
 			// finding the cloud members iteratively
@@ -481,10 +488,10 @@ void find_kernel_parameters(int Jx, int Jy, float MQ, int Nx, int Ny, dim3 *Grid
 
 				// Searching for the neighbours of the current list of 4D pixels
 				// Using one thread per d_members element (initially it's just one element)
-				find_neighbours<<<N_blocks, Block_size>>>(jj, N_members, N_cloud, Pixel_counter, ii, d_ix, d_iy, d_Jx, d_Jy, d_cloud, d_members);
+				find_neighbours<<<N_blocks, Block_size>>>(N_members, N_cloud, Pixel_counter, d_ix, d_iy, d_Jx, d_Jy, d_cloud, d_members);
 
 				cudaMemcpyFromSymbol(&N_members, d_N_members1, sizeof(unsigned int), 0, cudaMemcpyDeviceToHost);				
-				jj++;
+//				jj++;
 			}
 			while (N_members > 0);
 						
@@ -493,16 +500,10 @@ void find_kernel_parameters(int Jx, int Jy, float MQ, int Nx, int Ny, dim3 *Grid
 		
 		cudaMemcpy(h_cloud, d_cloud, Pixel_counter*sizeof(unsigned int), cudaMemcpyDeviceToHost);
 		
-		cudaFree(h_ix);
-		cudaFree(h_iy);
-		cudaFree(h_Jx);
-		cudaFree(h_Jy);
-		cudaFree(d_ix);
-		cudaFree(d_iy);
-		cudaFree(d_Jx);
-		cudaFree(d_Jy);
 		cudaFree(d_cloud);
 		cudaFree(d_members);
+		cudaFree(d_vec);
+		cudaFree(d_index);
 
 		printf("Found %d clusters on GPU\n", N_cloud);
 
@@ -520,7 +521,95 @@ __global__ void init_d_cloud(int *d_cloud, unsigned int Pixel_counter)
 }
 /* ------------------------------------------------ */
 
-__global__ void find_free_pixel(int *d_cloud, unsigned int Pixel_counter, int N_cloud, int *d_members)
+__global__ void find_maximum (int step, int N, float *vec, int *index, int *d_cloud, float *vec_out, int *index_out, int N_cloud, int *d_members)
+/*
+	One step in the iterative search for the brightest unassigned pixel.
+	   mask: input mask vector only needed for the step=0
+*/
+{
+	__shared__ float svec[FIND_MAXIMUM_BS];
+	__shared__ int sindex[FIND_MAXIMUM_BS];
+	
+	int i = threadIdx.x + blockIdx.x*blockDim.x;
+	
+	if (i >= N)
+		return;
+	
+	svec[threadIdx.x] = vec[i];
+	
+	if (step == 0)
+		// Initializing index vector during the first step:
+		sindex[threadIdx.x] = i;
+		else
+		sindex[threadIdx.x] = index[i];
+
+	if (step==0 && d_cloud[i]>0)
+		// For the masked (d_cloud>0) pixels, setting the vec value to a very low value
+		// (This needs to be done only during the first step)
+		svec[threadIdx.x] = -1e30;
+	
+	__syncthreads();
+	
+	// Binary reduction routine:
+	int nTotalThreads = FIND_MAXIMUM_BS;
+	while(nTotalThreads > 1)
+	{
+		int halfPoint = nTotalThreads / 2; // Number of active threads
+		if (threadIdx.x < halfPoint)
+		{
+			int i2 = i + halfPoint;
+			if (i2 < N) // Skipping the fictitious threads on the right side
+			{
+				int thread2 = threadIdx.x + halfPoint;
+				float temp = svec[thread2];
+				if (temp > svec[threadIdx.x])
+				{
+					// Memorizing both the larger svec value, and the corresponding index sindex
+					svec[threadIdx.x] = temp;
+					sindex[threadIdx.x] = sindex[thread2];
+				}
+			}
+		}
+		__syncthreads();
+		nTotalThreads = halfPoint; // Reducing the binary tree size by two
+	}
+	
+	if (threadIdx.x == 0)
+	{
+		if (gridDim.x == 1)
+		// The final reduction kernel call
+		{
+			if (svec[0] > -1e29)
+				// We found a new brightest pixel
+			{
+				// The index of the brightest pixel:
+				int i_pixel = sindex[0];
+				// Marking the brightest pixel as the first pixel in the new cloud with the index N_cloud:
+				d_cloud[i_pixel] = N_cloud;
+				// Adding the pixel to the start of the d_members vector:
+				d_members[0] = i_pixel;
+//				i_free_pixel = i_pixel;
+			}
+			else
+				// We ran out of pixels
+			{
+//				i_free_pixel = -1;
+				d_members[0] = -1;
+			}
+		}
+		else
+		{
+			vec_out[blockIdx.x] = svec[0];
+			index_out[blockIdx.x] = sindex[0];
+		}
+	}
+	
+}
+/* ------------------------------------------------ */
+
+
+/*
+__global__ void find_free_pixel (int *d_cloud, unsigned int Pixel_counter, int N_cloud, int *d_members)
 // The kernel to find a non-zero element in d_cloud, and store its index in the
 // device variable i_free_pixel, which needs to be pre-initialized to -1.
 {
@@ -542,10 +631,11 @@ __global__ void find_free_pixel(int *d_cloud, unsigned int Pixel_counter, int N_
 		}
 	}
 }
+*/
 
 /* ------------------------------------------------ */
 
-__global__ void find_neighbours(int jj, int N_members, int N_cloud, unsigned int Pixel_counter, int ii, int *d_ix, int *d_iy, int *d_Jx, int *d_Jy, int *d_cloud, int *d_members)
+__global__ void find_neighbours(int N_members, int N_cloud, unsigned int Pixel_counter, int *d_ix, int *d_iy, int *d_Jx, int *d_Jy, int *d_cloud, int *d_members)
 /* Identifying cloud memebers based on the freshly found cloud members in d_members.
    Each thread processes a different element of the d_cloud list.
 */
@@ -577,11 +667,11 @@ __global__ void find_neighbours(int jj, int N_members, int N_cloud, unsigned int
 	// Loop over all freshely added members:
 	for (int j=0; j<N_members; j++)
 	{
-		if (jj == 0)
+//		if (jj == 0)
 			// We just starting a new cloud, with only one member provided by ii index
-			i0 = ii;
-		else
-			i0 = d_members[j];
+//			i0 = ii;
+//		else
+		i0 = d_members[j];
 		
 		int dx  = abs(d_ix[i0] - ix);
 		int dy  = abs(d_iy[i0] - iy);
