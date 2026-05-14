@@ -25,6 +25,7 @@ int main(int argc, char **argv)
 	double mjd, mjd0;
 	int year, month, day, hour, minute;
     double second, exposure;	
+	float p_min;
 
 	// The motion vector space is between radii RMIN and RMAX (both are in MQ units)
 	// RMIN and RMAX should come as command line arguments
@@ -230,7 +231,7 @@ int main(int argc, char **argv)
 //	float std_master = 3.722e-4;
 	
 	// Signal detection theshold for image stacks (assuming summation stacking):
-//	float p_min = p_min_std * std_master * N_images;
+//  p_min = p_min_std * std_master * N_images;
 
 	float *d_test_image = NULL;
 	ERR( cudaMallocPitch(&d_test_image, &pitch, (size_t)(Ny*sizeof(float)), Nx) )
@@ -247,26 +248,18 @@ int main(int argc, char **argv)
 	unsigned int h_Pixel_counter = 0;
 	cudaMemcpy(d_Pixel_counter, &h_Pixel_counter, sizeof(unsigned int), cudaMemcpyHostToDevice);
 	
-	int *h_ix;
-	cudaMallocHost(&h_ix, MAX_PIXELS*sizeof(int));
-	int *h_iy;
-	cudaMallocHost(&h_iy, MAX_PIXELS*sizeof(int));
-	int *h_Jx;
-	cudaMallocHost(&h_Jx, MAX_PIXELS*sizeof(int));
-	int *h_Jy;
-	cudaMallocHost(&h_Jy, MAX_PIXELS*sizeof(int));
-	float *h_p;
-	cudaMallocHost(&h_p, MAX_PIXELS*sizeof(float));
-	int *d_ix;
-	cudaMalloc(&d_ix, MAX_PIXELS*sizeof(int));
-	int *d_iy;
-	cudaMalloc(&d_iy, MAX_PIXELS*sizeof(int));
-	int *d_Jx;
-	cudaMalloc(&d_Jx, MAX_PIXELS*sizeof(int));
-	int *d_Jy;
-	cudaMalloc(&d_Jy, MAX_PIXELS*sizeof(int));
-	float *d_p;
-	cudaMalloc(&d_p, MAX_PIXELS*sizeof(float));
+	List h_list;
+	cudaMallocHost(&h_list.ix, MAX_PIXELS*sizeof(int));
+	cudaMallocHost(&h_list.iy, MAX_PIXELS*sizeof(int));
+	cudaMallocHost(&h_list.Jx, MAX_PIXELS*sizeof(int));
+	cudaMallocHost(&h_list.Jy, MAX_PIXELS*sizeof(int));
+	cudaMallocHost(&h_list.p, MAX_PIXELS*sizeof(float));
+	List d_list;
+	cudaMalloc(&d_list.ix, MAX_PIXELS*sizeof(int));
+	cudaMalloc(&d_list.iy, MAX_PIXELS*sizeof(int));
+	cudaMalloc(&d_list.Jx, MAX_PIXELS*sizeof(int));
+	cudaMalloc(&d_list.Jy, MAX_PIXELS*sizeof(int));
+	cudaMalloc(&d_list.p, MAX_PIXELS*sizeof(float));
 	
 	cudaMemGetInfo(&free_mem, &total_mem);
 	printf("GPU memory: Free: %f GB, Total: %f GB\n\n", (float)free_mem/(1024*1024*1024), (float)total_mem/(1024*1024*1024));
@@ -277,9 +270,9 @@ int main(int argc, char **argv)
 	dim3 Grid_size;
 	int Ix1, Iy1;
 	find_kernel_parameters(0, 0, MQ, Nx, Ny, &Grid_size, &Ix1, &Iy1);
-	float p_min = 1e30;
+	p_min = 1e30;
 	// Zero-offset stacking:
-	motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,0,0,MQ,p_min,d_dt,d_test_image,d_ix,d_iy,d_Jx,d_Jy,d_p,1,d_Pixel_counter,Nx,Ny);
+	motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,0,0,MQ,p_min,d_dt,d_test_image,d_list,1,d_Pixel_counter,Nx,Ny);
 	
 	
 	ERR( cudaMemcpy2D(h_test_image, Ny*sizeof(float), d_test_image, pitch, Ny*sizeof(float), Nx, cudaMemcpyDeviceToHost) )
@@ -297,7 +290,7 @@ int main(int argc, char **argv)
 
 	find_kernel_parameters(RMIN, RMIN, MQ, Nx, Ny, &Grid_size, &Ix1, &Iy1);
 	p_min = 1e30;
-	motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,RMIN,RMIN,MQ,p_min,d_dt,d_test_image,d_ix,d_iy,d_Jx,d_Jy,d_p,1,d_Pixel_counter,Nx,Ny);
+	motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,RMIN,RMIN,MQ,p_min,d_dt,d_test_image,d_list,1,d_Pixel_counter,Nx,Ny);
 	ERR( cudaMemcpy2D(h_test_image, Ny*sizeof(float), d_test_image, pitch, Ny*sizeof(float), Nx, cudaMemcpyDeviceToHost) )
 	sigma_clipping(h_test_image, Npix, 3.0, &p0, &sgm, &Npix2, &kk);
 	printf("\n Rmin shift stack: p=%e, sgm=%e\n\n", p0, sgm);
@@ -306,7 +299,7 @@ int main(int argc, char **argv)
 
 	find_kernel_parameters(RMAX, RMAX, MQ, Nx, Ny, &Grid_size, &Ix1, &Iy1);
 	p_min = 1e30;
-	motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,RMAX,RMAX,MQ,p_min,d_dt,d_test_image,d_ix,d_iy,d_Jx,d_Jy,d_p,1,d_Pixel_counter,Nx,Ny);
+	motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,RMAX,RMAX,MQ,p_min,d_dt,d_test_image,d_list,1,d_Pixel_counter,Nx,Ny);
 	ERR( cudaMemcpy2D(h_test_image, Ny*sizeof(float), d_test_image, pitch, Ny*sizeof(float), Nx, cudaMemcpyDeviceToHost) )
 	sigma_clipping(h_test_image, Npix, 3.0, &p0, &sgm, &Npix2, &kk);
 	printf("\n Rmax shift stack: p=%e, sgm=%e\n\n", p0, sgm);
@@ -317,7 +310,7 @@ int main(int argc, char **argv)
 //	exit(0);
 
 //	p_min = p_min_std * sgm;
-	p_min = 3.722e-4 * 2.5;
+	p_min = 4 * 3.722e-4;
 
 
 	cudaDeviceSynchronize();
@@ -341,7 +334,7 @@ int main(int argc, char **argv)
 				// The main compute kernel: searches for moving objects over all images,
 				// all allowed base image tiles, for the given motion vector (Jx,Jy) in MQ units
 				// Using the maximum 1024 threads per block, to cover 32x32 pixel tiles
-				motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,Jx,Jy,MQ,p_min,d_dt,d_test_image,d_ix,d_iy,d_Jx,d_Jy,d_p,0,d_Pixel_counter,Nx,Ny);
+				motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,Jx,Jy,MQ,p_min,d_dt,d_test_image,d_list,0,d_Pixel_counter,Nx,Ny);
 				
 				Jcount++;
 			}			
@@ -366,35 +359,35 @@ int main(int argc, char **argv)
 		printf("Number of bright pixels: %d\n", h_Pixel_counter);
 		if (h_Pixel_counter > 0)
 		{
-			cudaMemcpy(h_ix, d_ix, h_Pixel_counter*sizeof(int), cudaMemcpyDeviceToHost);
-			cudaMemcpy(h_iy, d_iy, h_Pixel_counter*sizeof(int), cudaMemcpyDeviceToHost);
-			cudaMemcpy(h_Jx, d_Jx, h_Pixel_counter*sizeof(int), cudaMemcpyDeviceToHost);
-			cudaMemcpy(h_Jy, d_Jy, h_Pixel_counter*sizeof(int), cudaMemcpyDeviceToHost);
-			cudaMemcpy(h_p, d_p, h_Pixel_counter*sizeof(float), cudaMemcpyDeviceToHost);
+			cudaMemcpy(h_list.ix, d_list.ix, h_Pixel_counter*sizeof(int), cudaMemcpyDeviceToHost);
+			cudaMemcpy(h_list.iy, d_list.iy, h_Pixel_counter*sizeof(int), cudaMemcpyDeviceToHost);
+			cudaMemcpy(h_list.Jx, d_list.Jx, h_Pixel_counter*sizeof(int), cudaMemcpyDeviceToHost);
+			cudaMemcpy(h_list.Jy, d_list.Jy, h_Pixel_counter*sizeof(int), cudaMemcpyDeviceToHost);
+			cudaMemcpy(h_list.p, d_list.p, h_Pixel_counter*sizeof(float), cudaMemcpyDeviceToHost);
 			cudaDeviceSynchronize();
 
 			float pmax = -1e30;
 			int imax = -1;
 			for (int i=0; i<h_Pixel_counter; i++)
 			{
-				if (h_p[i] > pmax)
+				if (h_list.p[i] > pmax)
 				{
-					pmax = h_p[i];
+					pmax = h_list.p[i];
 					imax = i;
 				}
 			}
 			printf("Motion vector: (%d, %d); pixel coords: (%d, %d); p=%f (%f std), i=%d\n",
-			h_Jx[imax], h_Jy[imax], h_ix[imax], h_iy[imax], h_p[imax],
-			h_p[imax]/sgm, imax);
+			h_list.Jx[imax], h_list.Jy[imax], h_list.ix[imax], h_list.iy[imax], h_list.p[imax],
+			h_list.p[imax]/sgm, imax);
 			
 			int *Cluster_index = (int *)malloc(h_Pixel_counter*sizeof(int));			
 			
 			cudaDeviceSynchronize();
 			gettimeofday (&tdr0, NULL);  
-//			cluster_analysis(h_ix,h_iy,h_Jx,h_Jy,h_p, h_Pixel_counter, Cluster_index);
+			cluster_analysis(h_list, h_Pixel_counter, Cluster_index);
 			cudaDeviceSynchronize();
 			gettimeofday (&tdr1, NULL);  			
-			cluster_analysis_cuda(d_ix,d_iy,d_Jx,d_Jy,d_p, h_Pixel_counter, Cluster_index);
+			cluster_analysis_cuda(d_list, h_Pixel_counter, Cluster_index);
 			cudaDeviceSynchronize();
 			gettimeofday (&tdr2, NULL);  
 
@@ -409,16 +402,16 @@ int main(int argc, char **argv)
 			FILE *fp = fopen("list.dat", "w");
 			for (int i=0; i<h_Pixel_counter; i++)
 			{
-				fprintf(fp, "%d %d %d %d %f %d\n", h_Jx[i], h_Jy[i], h_ix[i], h_iy[i],
-				h_p[i]/sgm, Cluster_index[i]);
+				fprintf(fp, "%d %d %d %d %f %d\n", h_list.Jx[i], h_list.Jy[i], h_list.ix[i], h_list.iy[i],
+				h_list.p[i]/sgm, Cluster_index[i]);
 			}
 			fclose(fp);
 			free(Cluster_index);
 
-			find_kernel_parameters(h_Jx[imax], h_Jy[imax], MQ, Nx, Ny, &Grid_size, &Ix1, &Iy1);
+			find_kernel_parameters(h_list.Jx[imax], h_list.Jy[imax], MQ, Nx, Ny, &Grid_size, &Ix1, &Iy1);
 
 			motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,
-			h_Jx[imax],h_Jy[imax],MQ,p_min,d_dt,d_test_image,d_ix,d_iy,d_Jx,d_Jy,d_p,1,d_Pixel_counter,Nx,Ny);
+			h_list.Jx[imax],h_list.Jy[imax],MQ,p_min,d_dt,d_test_image,d_list,1,d_Pixel_counter,Nx,Ny);
 
 			ERR( cudaMemcpy2D(h_test_image, Ny*sizeof(float), d_test_image, pitch, Ny*sizeof(float), Nx, cudaMemcpyDeviceToHost) )
 			cudaDeviceSynchronize();
@@ -431,10 +424,11 @@ int main(int argc, char **argv)
 	ERR( cudaFreeHost(h_image1) )
 	ERR( cudaFreeHost(h_dt) )
 	ERR( cudaFreeHost(h_test_image) )
-	cudaFree(h_ix);
-	cudaFree(h_iy);
-	cudaFree(h_Jx);
-	cudaFree(h_Jy);
+	cudaFree(h_list.ix);
+	cudaFree(h_list.iy);
+	cudaFree(h_list.Jx);
+	cudaFree(h_list.Jy);
+	cudaFree(h_list.p);
 	#else
 	free(h_image1);
 	free(h_dt);
@@ -443,10 +437,11 @@ int main(int argc, char **argv)
 
 	free(h_image);
 	free(buf0);	
-	cudaFree(d_ix);
-	cudaFree(d_iy);
-	cudaFree(d_Jx);
-	cudaFree(d_Jy);
+	cudaFree(d_list.ix);
+	cudaFree(d_list.iy);
+	cudaFree(d_list.Jx);
+	cudaFree(d_list.Jy);
+	cudaFree(d_list.p);
 
 	return 0;
 }
