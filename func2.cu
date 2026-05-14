@@ -270,7 +270,7 @@ void find_kernel_parameters(int Jx, int Jy, float MQ, int Nx, int Ny, dim3 *Grid
 	return;
 }	
 /* ------------------------------------------------ */
-	void cluster_analysis(List h_list, unsigned int Pixel_counter, int *Cluster_index)
+	void cluster_analysis(List h_list, unsigned int Pixel_counter, int *Cluster_index, int *N_cloud)
 	/* Carrying out cluster analysis in 4D on list.
 	Output: Cluster_index vector containing cluster associations for each pixel.
 	*/
@@ -386,21 +386,26 @@ void find_kernel_parameters(int Jx, int Jy, float MQ, int Nx, int Ny, dim3 *Grid
 		while(i_max != -1);
 		
 		printf("Found %d clusters\n", counter+1);
+		*N_cloud = counter + 1;
 
 		return;
 		
 	}
 /* ------------------------------------------------ */
 
-	void cluster_analysis_cuda(List d_list, unsigned int Pixel_counter, int *h_cloud)
-	// Carrying out the cluster analysis on GPU
+	void cluster_analysis_cuda(List d_list, unsigned int Pixel_counter, int *h_cloud, int *N_cloud)
+	/* Carrying out the cluster analysis on GPU. The results (cloud ID for each pixel from the input d_list) are stored
+	in h_cloud.
+	*/
 	{
 
 		int *d_cloud;
 		cudaMalloc(&d_cloud, Pixel_counter*sizeof(int));
 		int *d_members;
 		cudaMalloc(&d_members, Pixel_counter*sizeof(int));		
+		// NN should be large enough to accomodate all intermediate results of the reduction:
 		int NN = Pixel_counter/FIND_MAXIMUM_BS * 2;
+		// The scratch vectors to store the results of the intermediate steps of the reduction:
 		float *d_vec;
 		cudaMalloc(&d_vec, NN*sizeof(float));
 		int *d_index;
@@ -418,16 +423,19 @@ void find_kernel_parameters(int Jx, int Jy, float MQ, int Nx, int Ny, dim3 *Grid
 			Block_size = Block_size0;
 		int N_blocks = (Pixel_counter+Block_size-1)/Block_size;
 
+		// Initially d_cloud elements are all set to 0 (no cloud association):
 		init_d_cloud<<<N_blocks,Block_size>>>(d_cloud, Pixel_counter);
 
-		int N_cloud = 0;
+		int counter = -1;
 		
 		// Cloud loop
 		do
 		{
-			N_cloud++;
+			counter++;
 
-			// Finding the brightest unassigned pixel - it will be the start of a new cloud
+			// Finding the brightest unassigned pixel on GPU - it will be the start of a new cloud
+			// This is tricky as it is done in parallel, using a binary tree reduction at the block level,
+			// conisting with one or more iterative reduction kernel calls ("steps"), to handle vectors of an arbitrary length
 			int step = 0;
 			int offset0;
 			int offset1;
@@ -437,6 +445,7 @@ void find_kernel_parameters(int Jx, int Jy, float MQ, int Nx, int Ny, dim3 *Grid
 			{
 				if (step == 0)
 				{
+					// During the first step, the source of the data (pixel brightness) is the input d_list.p vector:
 					d_vec1 = d_list.p;
 					N = Pixel_counter;
 					Block_size2 = Block_size;
@@ -446,6 +455,7 @@ void find_kernel_parameters(int Jx, int Jy, float MQ, int Nx, int Ny, dim3 *Grid
 				}
 				else
 				{
+					// For subsequent steps, the source of the data is a segment of the scratch vector d_vec, with indices offset0...offset1
 					d_vec1 = &d_vec[offset0];
 					N = N_blocks2; // Each block from the previous iteration becomes a thread in the new iteration
 					offset1 = offset1 + N;
@@ -455,8 +465,8 @@ void find_kernel_parameters(int Jx, int Jy, float MQ, int Nx, int Ny, dim3 *Grid
 						Block_size2 = Block_size0;
 					N_blocks2 = (N+Block_size2-1)/Block_size2; // Updated number of blocks for the current iteration
 				}
-//		printf("%d, %d, %d; %d %d\n", step,N_blocks2,Block_size2, offset0, offset1);
-				find_maximum<<<N_blocks2,Block_size2>>> (step, N, d_vec1, &d_index[offset0], d_cloud, &d_vec[offset1], &d_index[offset1], N_cloud, d_members);
+				// One stage of a binary reduction:
+				find_maximum<<<N_blocks2,Block_size2>>> (step, N, d_vec1, &d_index[offset0], d_cloud, &d_vec[offset1], &d_index[offset1], counter, d_members);
 				
 				step++;
 				offset0 = offset1;
@@ -468,11 +478,11 @@ void find_kernel_parameters(int Jx, int Jy, float MQ, int Nx, int Ny, dim3 *Grid
 			if (ii == -1)
 				// No more clusters
 				{
-					N_cloud--;
+					counter--;
 					break;
 				}
 
-//			printf("Cloud %d, brightest pixel=%d\n", N_cloud, ii);
+//			printf("Cloud %d, brightest pixel=%d\n", *N_cloud, ii);
 				
 			// We are starting a new cloud (with one pixel for now, with the index ii)
 			N_members = 1;
@@ -486,10 +496,9 @@ void find_kernel_parameters(int Jx, int Jy, float MQ, int Nx, int Ny, dim3 *Grid
 
 				// Searching for the neighbours of the current list of 4D pixels
 				// Using one thread per d_members element (initially it's just one element)
-				find_neighbours<<<N_blocks, Block_size>>>(N_members, N_cloud, Pixel_counter, d_list, d_cloud, d_members);
+				find_neighbours<<<N_blocks, Block_size>>>(N_members, counter, Pixel_counter, d_list, d_cloud, d_members);
 
 				cudaMemcpyFromSymbol(&N_members, d_N_members1, sizeof(unsigned int), 0, cudaMemcpyDeviceToHost);				
-//				jj++;
 			}
 			while (N_members > 0);
 						
@@ -502,8 +511,10 @@ void find_kernel_parameters(int Jx, int Jy, float MQ, int Nx, int Ny, dim3 *Grid
 		cudaFree(d_members);
 		cudaFree(d_vec);
 		cudaFree(d_index);
+		
+		*N_cloud = counter + 1;
 
-		printf("Found %d clusters on GPU\n", N_cloud);
+		printf("Found %d clusters on GPU\n", *N_cloud);
 
 	}
 /* ------------------------------------------------ */
@@ -515,13 +526,13 @@ __global__ void init_d_cloud(int *d_cloud, unsigned int Pixel_counter)
 	if (i_pixel >= Pixel_counter)
 		return;
 
-	d_cloud[i_pixel] = 0;
+	d_cloud[i_pixel] = -1;
 }
 /* ------------------------------------------------ */
 
 __global__ void find_maximum (int step, int N, float *vec, int *index, int *d_cloud, float *vec_out, int *index_out, int N_cloud, int *d_members)
 /*
-	One step in the iterative search for the brightest unassigned pixel.
+	One step in the iterative search for the brightest unassigned pixel, using a binary reduction method.
 	   mask: input mask vector only needed for the step=0
 */
 {
@@ -541,8 +552,8 @@ __global__ void find_maximum (int step, int N, float *vec, int *index, int *d_cl
 		else
 		sindex[threadIdx.x] = index[i];
 
-	if (step==0 && d_cloud[i]>0)
-		// For the masked (d_cloud>0) pixels, setting the vec value to a very low value
+	if (step==0 && d_cloud[i]!=-1)
+		// For the assigned pixels, setting the vec value to a very low value
 		// (This needs to be done only during the first step)
 		svec[threadIdx.x] = -1e30;
 	
@@ -586,16 +597,15 @@ __global__ void find_maximum (int step, int N, float *vec, int *index, int *d_cl
 				d_cloud[i_pixel] = N_cloud;
 				// Adding the pixel to the start of the d_members vector:
 				d_members[0] = i_pixel;
-//				i_free_pixel = i_pixel;
 			}
 			else
 				// We ran out of pixels
 			{
-//				i_free_pixel = -1;
 				d_members[0] = -1;
 			}
 		}
 		else
+		// For intermediate steps, we store the partial reductions results as segments in vectors vec_out and index_out
 		{
 			vec_out[blockIdx.x] = svec[0];
 			index_out[blockIdx.x] = sindex[0];
@@ -603,33 +613,6 @@ __global__ void find_maximum (int step, int N, float *vec, int *index, int *d_cl
 	}
 	
 }
-/* ------------------------------------------------ */
-
-
-/*
-__global__ void find_free_pixel (int *d_cloud, unsigned int Pixel_counter, int N_cloud, int *d_members)
-// The kernel to find a non-zero element in d_cloud, and store its index in the
-// device variable i_free_pixel, which needs to be pre-initialized to -1.
-{
-	if (i_free_pixel != -1)
-		return;
-	
-	int i_pixel = threadIdx.x + blockIdx.x*blockDim.x;
-	
-	if (i_pixel >= Pixel_counter)
-		return;
-	
-	if (d_cloud[i_pixel] == 0)
-	{
-		int old = atomicCAS(&i_free_pixel, -1, i_pixel);
-		if (old == -1)
-		{
-			d_cloud[i_pixel] = N_cloud;
-			d_members[0] = i_pixel;
-		}
-	}
-}
-*/
 
 /* ------------------------------------------------ */
 
@@ -645,7 +628,7 @@ __global__ void find_neighbours(int N_members, int N_cloud, unsigned int Pixel_c
 		return;
 
 	// Skipping the pixels which have already been assigned to a cloud:
-	if (d_cloud[i] > 0)
+	if (d_cloud[i] != -1)
 		return;
 
 	int ix = d_list.ix[i];
@@ -659,10 +642,6 @@ __global__ void find_neighbours(int N_members, int N_cloud, unsigned int Pixel_c
 	// Loop over all freshely added members:
 	for (int j=0; j<N_members; j++)
 	{
-//		if (jj == 0)
-			// We just starting a new cloud, with only one member provided by ii index
-//			i0 = ii;
-//		else
 		i0 = d_members[j];
 		
 		int dx  = abs(d_list.ix[i0] - ix);
@@ -692,6 +671,94 @@ __global__ void find_neighbours(int N_members, int N_cloud, unsigned int Pixel_c
 		int i1 = atomicInc(&d_N_members1, MAX_PIXELS);
 		d_members[i1] = i;
 	}
+}
+
+/* ------------------------------------------------ */
+
+void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *Cluster_index, Cloud *cloud)
+// Computing basic stats for the brightest clouds
+{
+	int NC;
+	if (N_cloud < ICLOUD_STATS_MAX)
+		NC = N_cloud;
+	else
+		NC = ICLOUD_STATS_MAX;
+	
+	FILE *fp = fopen("stats.dat", "w");	
+	
+	for (int icloud=0; icloud<NC; icloud++)
+	{
+		float pmax = -1e30;
+		int imax = -1;
+		int ix_max = -1e7;
+		int iy_max = -1e7;
+		int Jx_max = -1e7;
+		int Jy_max = -1e7;
+		int ix_min = 1e7;
+		int iy_min = 1e7;
+		int Jx_min = 1e7;
+		int Jy_min = 1e7;
+		int N = 0;
+		float mass = 0.0;
+		for (int i=0; i<h_Pixel_counter; i++)
+		{
+			if (Cluster_index[i] == icloud)
+			{
+				N++;
+				mass = mass + h_list.p[i];
+				if (h_list.p[i] > pmax)
+				{
+					pmax = h_list.p[i];
+					imax = i;
+				}
+				if (h_list.ix[i] > ix_max)
+					ix_max = h_list.ix[i];
+				if (h_list.iy[i] > iy_max)
+					iy_max = h_list.iy[i];
+				if (h_list.Jx[i] > Jx_max)
+					Jx_max = h_list.Jx[i];
+				if (h_list.Jy[i] > Jy_max)
+					Jy_max = h_list.Jy[i];
+				if (h_list.ix[i] < ix_min)
+					ix_min = h_list.ix[i];
+				if (h_list.iy[i] < iy_min)
+					iy_min = h_list.iy[i];
+				if (h_list.Jx[i] < Jx_min)
+					Jx_min = h_list.Jx[i];
+				if (h_list.Jy[i] < Jy_min)
+					Jy_min = h_list.Jy[i];
+			}
+			
+		}
+		
+		if (N == 0)
+		{
+			printf("Cluster %d has zero members!\n", icloud);
+			continue;
+		}
+		
+		cloud[icloud].pmax = pmax;
+		cloud[icloud].imax = imax;
+		cloud[icloud].ix_min = ix_min;
+		cloud[icloud].iy_min = iy_min;
+		cloud[icloud].Jx_min = Jx_min;
+		cloud[icloud].Jy_min = Jy_min;
+		cloud[icloud].ix_max = ix_max;
+		cloud[icloud].iy_max = iy_max;
+		cloud[icloud].Jx_max = Jx_max;
+		cloud[icloud].Jy_max = Jy_max;
+		cloud[icloud].N = N;
+		cloud[icloud].mass = mass;				
+		
+		//!!! imax is wrong on GPU!
+		
+		float rad_xy = sqrt(pow((ix_max-ix_min)/2.0,2) + pow((ix_max-ix_min)/2.0,2));
+		float rad_J = sqrt(pow((Jx_max-Jx_min)/2.0,2) + pow((Jx_max-Jx_min)/2.0,2));
+		fprintf(fp, "%4d %11e %4d %4d %4d %4d %8d %4d %11e %8.2f %8.2f\n", icloud, pmax, h_list.ix[imax], h_list.iy[imax], h_list.Jx[imax], h_list.Jy[imax], imax, N, mass, rad_xy, rad_J);
+	}
+	
+	fclose(fp);
+	return;
 }
 
 
@@ -759,4 +826,31 @@ __global__ void find_free_pixel(int *d_cloud, unsigned int Pixel_counter)
 */
 
 
+/* ------------------------------------------------ */
+
+
+/*
+__global__ void find_free_pixel (int *d_cloud, unsigned int Pixel_counter, int N_cloud, int *d_members)
+// The kernel to find a non-zero element in d_cloud, and store its index in the
+// device variable i_free_pixel, which needs to be pre-initialized to -1.
+{
+	if (i_free_pixel != -1)
+		return;
+	
+	int i_pixel = threadIdx.x + blockIdx.x*blockDim.x;
+	
+	if (i_pixel >= Pixel_counter)
+		return;
+	
+	if (d_cloud[i_pixel] == 0)
+	{
+		int old = atomicCAS(&i_free_pixel, -1, i_pixel);
+		if (old == -1)
+		{
+			d_cloud[i_pixel] = N_cloud;
+			d_members[0] = i_pixel;
+		}
+	}
+}
+*/
 /* ------------------------------------------------ */

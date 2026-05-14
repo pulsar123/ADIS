@@ -359,6 +359,8 @@ int main(int argc, char **argv)
 		printf("Number of bright pixels: %d\n", h_Pixel_counter);
 		if (h_Pixel_counter > 0)
 		{
+			int N_cloud;
+			
 			cudaMemcpy(h_list.ix, d_list.ix, h_Pixel_counter*sizeof(int), cudaMemcpyDeviceToHost);
 			cudaMemcpy(h_list.iy, d_list.iy, h_Pixel_counter*sizeof(int), cudaMemcpyDeviceToHost);
 			cudaMemcpy(h_list.Jx, d_list.Jx, h_Pixel_counter*sizeof(int), cudaMemcpyDeviceToHost);
@@ -376,7 +378,7 @@ int main(int argc, char **argv)
 					imax = i;
 				}
 			}
-			printf("Motion vector: (%d, %d); pixel coords: (%d, %d); p=%f (%f std), i=%d\n",
+			printf("Motion vector for the brightest pixel: (%d, %d); pixel coords: (%d, %d); p=%f (%f std), i=%d\n",
 			h_list.Jx[imax], h_list.Jy[imax], h_list.ix[imax], h_list.iy[imax], h_list.p[imax],
 			h_list.p[imax]/sgm, imax);
 			
@@ -384,10 +386,16 @@ int main(int argc, char **argv)
 			
 			cudaDeviceSynchronize();
 			gettimeofday (&tdr0, NULL);  
-			cluster_analysis(h_list, h_Pixel_counter, Cluster_index);
+
+			// Cluster analysis on the CPU:
+//			cluster_analysis(h_list, h_Pixel_counter, Cluster_index, &N_cloud);
+			
 			cudaDeviceSynchronize();
 			gettimeofday (&tdr1, NULL);  			
-			cluster_analysis_cuda(d_list, h_Pixel_counter, Cluster_index);
+			
+			// CLuster analysis on the GPU (much faster when Pixel_counter>>100k)
+			cluster_analysis_cuda(d_list, h_Pixel_counter, Cluster_index, &N_cloud);
+			
 			cudaDeviceSynchronize();
 			gettimeofday (&tdr2, NULL);  
 
@@ -402,21 +410,40 @@ int main(int argc, char **argv)
 			FILE *fp = fopen("list.dat", "w");
 			for (int i=0; i<h_Pixel_counter; i++)
 			{
-				fprintf(fp, "%d %d %d %d %f %d\n", h_list.Jx[i], h_list.Jy[i], h_list.ix[i], h_list.iy[i],
-				h_list.p[i]/sgm, Cluster_index[i]);
+				fprintf(fp, "%d %d %d %d %d %11e %d\n", i, h_list.Jx[i], h_list.Jy[i], h_list.ix[i], h_list.iy[i],
+				h_list.p[i], Cluster_index[i]);
 			}
 			fclose(fp);
+
+			Cloud *cloud = (Cloud *)malloc((N_cloud+1)*sizeof(Cloud));
+
+			// Computing stats for the ICLOUD_STATS_MAX brightest clouds			
+			cloud_stats(h_list, h_Pixel_counter, N_cloud, Cluster_index, cloud);
+
+			// Saving fits stacks for the most significant motion detections (clouds)
+			int NC;
+			char fits_name[100];
+			if (N_cloud < ICLOUD_FITS_MAX)
+				NC = N_cloud;
+			else
+				NC = ICLOUD_FITS_MAX;
+			for (int icloud=0; icloud<NC; icloud++)
+			{
+				int imax = cloud[icloud].imax;
+				int Jx = h_list.Jx[imax];
+				int Jy = h_list.Jy[imax];
+				find_kernel_parameters(Jx, Jy, MQ, Nx, Ny, &Grid_size, &Ix1, &Iy1);
+
+				motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,
+				Jx,Jy,MQ,p_min,d_dt,d_test_image,d_list,1,d_Pixel_counter,Nx,Ny);
+
+				ERR( cudaMemcpy2D(h_test_image, Ny*sizeof(float), d_test_image, pitch, Ny*sizeof(float), Nx, cudaMemcpyDeviceToHost) )
+				cudaDeviceSynchronize();
+				sprintf(fits_name,"cloud_%03d.fit", icloud);
+				dump_fits(Nx, Ny, 1, h_test_image, fits_name);
+			}
 			free(Cluster_index);
-
-			find_kernel_parameters(h_list.Jx[imax], h_list.Jy[imax], MQ, Nx, Ny, &Grid_size, &Ix1, &Iy1);
-
-			motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,
-			h_list.Jx[imax],h_list.Jy[imax],MQ,p_min,d_dt,d_test_image,d_list,1,d_Pixel_counter,Nx,Ny);
-
-			ERR( cudaMemcpy2D(h_test_image, Ny*sizeof(float), d_test_image, pitch, Ny*sizeof(float), Nx, cudaMemcpyDeviceToHost) )
-			cudaDeviceSynchronize();
-			dump_fits(Nx, Ny, 1, h_test_image, "output.fits");
-			
+	
 		}
 	}
 

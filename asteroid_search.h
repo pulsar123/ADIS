@@ -34,6 +34,9 @@
 
 #define FIND_MAXIMUM_BS 512 // block size for the find_maximum kernel
 
+#define ICLOUD_FITS_MAX 10  // Number of the fits files to save for the brightest motion detections
+#define ICLOUD_STATS_MAX 1000  // Number of the top clouds to compute statistics for
+
 //__device__ int i_free_pixel;
 __device__ unsigned int d_N_members1; 
 
@@ -44,6 +47,22 @@ struct List
 	int *ix; // Base pixel coordinates
 	int *iy;
 	float *p; // Stacked pixel brightness
+};
+
+struct Cloud
+{
+	float pmax;
+	int imax;
+	int ix_min;
+	int iy_min;
+	int Jx_min;
+	int Jy_min;
+	int ix_max;
+	int iy_max;
+	int Jx_max;
+	int Jy_max;
+	int N;
+	float mass;	
 };
 
 
@@ -59,9 +78,9 @@ __global__ void subtract_master_image (float **d_image, int N_images, size_t pit
 
 void find_kernel_parameters(int Jx, int Jy, float MQ, int Nx, int Ny, dim3 *Grid_size, int *Ix1, int *Iy1);
 
-void cluster_analysis(List h_list, unsigned int Pixel_counter, int *Cluster_index);
+void cluster_analysis(List h_list, unsigned int Pixel_counter, int *Cluster_index, int *N_cloud);
 
-void cluster_analysis_cuda(List d_list, unsigned int Pixel_counter, int *h_cloud);
+void cluster_analysis_cuda(List d_list, unsigned int Pixel_counter, int *h_cloud, int *N_cloud);
 
 __global__ void init_d_cloud(int *d_cloud, unsigned int Pixel_counter);
 
@@ -70,5 +89,7 @@ __global__ void init_d_cloud(int *d_cloud, unsigned int Pixel_counter);
 __global__ void find_neighbours(int N_members, int N_cloud, unsigned int Pixel_counter, List d_list, int *d_cloud, int *d_members);
 
 __global__ void find_maximum (int step, int N, float *vec, int *index, int *d_cloud, float *vec_out, int *index_out, int N_cloud, int *d_members);
+
+void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *Cluster_index, Cloud *cloud);
 
 #endif
