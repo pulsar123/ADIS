@@ -87,7 +87,6 @@ __global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch,
 		{
 			// Base 31x31 tile initialization
 			// For the base tile only, skipping the last column and last row, because there is no interpolation:
-			// Pointer to the start of the image's row:
 			if (ix>=0 && ix<Nx && iy>=0 && iy<Ny)
 			{
 				float *row = (float *)((char*)d_image[i] + ix * pitch);
@@ -100,8 +99,6 @@ __global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch,
 				else
 					base_tile[jx][jy] = 0.0;
 			}
-//			else
-//				printf("base: %d %d %d %d\n", ix, iy, Jx, Jy);
 		}
 		
 		if (i > 0)
@@ -111,11 +108,8 @@ __global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch,
 			if (ix0>=0 && ix0<Nx && iy0>=0 && iy0<Ny)
 			{
 				float *row = (float *)((char*)d_image[i] + ix0 * pitch);
-				// Memory bug!!!:
 				image_tile[jx][jy] = row[iy0]; // Coalesced read
 			}
-//			else
-//				printf("reg: %d %d %e %e %d %d\n", ix0, iy0, dx, dy, Jx, Jy);
 		}
 		
 		__syncthreads(); // Required because of the tile initialization by all threads ^^
@@ -123,7 +117,7 @@ __global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch,
 		if (i > 0 && threadIdx.x<NB && threadIdx.y<NB)
 		// Linear pixel interpolation:
 		{
-			if (image_tile[jx][jy]>MASK && image_tile[jx][jy+1]>MASK && image_tile[jx+1][jy]>MASK && 	image_tile[jx+1][jy+1]>MASK)
+			if (image_tile[jx][jy]>MASK && image_tile[jx][jy+1]>MASK && image_tile[jx+1][jy]>MASK && image_tile[jx+1][jy+1]>MASK)
 			{
 				base_tile[jx][jy] += 
 					image_tile[jx][jy]     * (1.0-fdx) * (1.0-fdy) +
@@ -139,7 +133,7 @@ __global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch,
 	
 	// Normalizing the pixel value, only using non-masked pixels:
 	if (threadIdx.x<NB && threadIdx.y<NB)
-		if (counter > N_images*0.75)  // !!! 0
+		if (counter > N_images*0.75)  // !!! Only using the pixels where at least 75% of the images have a non-masked value
 			base_tile[jx][jy] = base_tile[jx][jy] / counter;
 		else
 			base_tile[jx][jy] = MASK0;
@@ -739,6 +733,10 @@ void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *C
 		
 		cloud[icloud].pmax = pmax;
 		cloud[icloud].imax = imax;
+		cloud[icloud].ix = h_list.ix[imax];
+		cloud[icloud].iy = h_list.iy[imax];
+		cloud[icloud].Jx = h_list.Jx[imax];
+		cloud[icloud].Jy = h_list.Jy[imax];
 		cloud[icloud].ix_min = ix_min;
 		cloud[icloud].iy_min = iy_min;
 		cloud[icloud].Jx_min = Jx_min;
@@ -760,6 +758,61 @@ void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *C
 	fclose(fp);
 	return;
 }
+
+/* ------------------------------------------------ */
+	
+	void save_cloud_fits (int Nx, int Ny, int Nc, float *img, const char *name, const char *name0, Cloud *cloud, int icloud)
+	// Dump a 2D image into a FITS file (for debugging)
+	{
+		char buffer[100];
+		int status=0; 
+		float bias = 0.03;
+		
+		long Npixels = Nx*Ny;
+		
+		float *img1 = (float *)malloc(Npixels*sizeof(float));
+		
+		
+		for (long i = 0; i < Npixels; i++)
+		{
+			if (img[i] > MASK)
+				img1[i] = img[i] + bias;
+			else
+				img1[i] = bias;
+		}
+		
+		sprintf(buffer, "rm -f %s >/dev/null", name);
+		if (system(buffer))
+			printf("Could not delete the file %s\n", name);
+		fitsfile *fk, *f0;
+		
+		fits_open_file(&f0, name0, READONLY, &status);
+		fits_error(status);
+		
+		fits_create_file(&fk, name, &status);
+		fits_error(status);
+		
+		fits_copy_header(f0, fk, &status);
+		fits_error(status);
+
+		int Box_size = 100; // box size in pixels
+		int BS2 = Box_size/2;
+		sprintf(buffer, "%d;%d;%d;%d;-1.0;Cloud %d;", cloud[icloud].iy-BS2, cloud[icloud].ix-BS2,
+		cloud[icloud].iy+BS2,cloud[icloud].ix+BS2,icloud);
+		fits_write_key(fk, TSTRING, "ANNOTATE", buffer, NULL, &status);
+		
+		long nelem1  = (long)Nx * Ny * Nc;
+		long fpixel = 1;
+		fits_write_img(fk, TFLOAT, fpixel, nelem1, img1, &status);
+		fits_error(status);
+		fits_close_file(fk, &status);		
+		fits_close_file(f0, &status);		
+		
+		free(img1);
+		
+		return;
+	}
+	
 
 
 /* ------------------------------------------------ */

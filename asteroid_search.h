@@ -53,6 +53,10 @@ struct Cloud
 {
 	float pmax;
 	int imax;
+	int ix;
+	int iy;
+	int Jx;
+	int Jy;
 	int ix_min;
 	int iy_min;
 	int Jx_min;
@@ -91,5 +95,7 @@ __global__ void find_neighbours(int N_members, int N_cloud, unsigned int Pixel_c
 __global__ void find_maximum (int step, int N, float *vec, int *index, int *d_cloud, float *vec_out, int *index_out, int N_cloud, int *d_members);
 
 void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *Cluster_index, Cloud *cloud);
+
+void save_cloud_fits (int Nx, int Ny, int Nc, float *img, const char *name, const char *name0, Cloud *cloud, int i_cloud);
 
 #endif

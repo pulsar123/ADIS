@@ -16,7 +16,7 @@ int main(int argc, char **argv)
     struct timeval  tdr0, tdr1, tdr, tdr2, tdr3;
     double restime;
 	int status = 0, naxis;
-    long naxes[3];
+    long naxes[2];
 	long Npix;
 	int Nx, Ny, Nc, Nx0, Ny0;
 	float *buf0; // host
@@ -26,6 +26,7 @@ int main(int argc, char **argv)
 	int year, month, day, hour, minute;
     double second, exposure;	
 	float p_min;
+	char name0[100];
 
 	// The motion vector space is between radii RMIN and RMAX (both are in MQ units)
 	// RMIN and RMAX should come as command line arguments
@@ -72,20 +73,25 @@ int main(int argc, char **argv)
 	float *d_dt = NULL;
 	ERR( cudaMalloc(&d_dt, N_images*sizeof(float*)) )
 	
-	float sgm_Gauss = FWHM / sqrt(8*log(2.0));
-	printf("sgm_Gauss = %f\n", sgm_Gauss);
+//	float sgm_Gauss = FWHM / sqrt(8*log(2.0));
+//	printf("sgm_Gauss = %f\n", sgm_Gauss);
 
 	gettimeofday (&tdr2, NULL);  		
 	
 	// Reading input FITS images one by one, using cudaMemcpyAsync to do concurrent copying to the GPU
 	for (int i_image=0; i_image<N_images; i_image++)
 	{		
+		if (i_image == 0)
+			sprintf(name0,"%s",argv[1]);
 		// Reading the next input FITS file
 		printf("\nReading file %s\n", argv[1+i_image]);
 		fitsfile *f0;
 		char *file0 = argv[1+i_image];
 		fits_open_file(&f0, file0, READONLY, &status);
 		fits_error(status);
+		
+		fits_read_key(f0, TFLOAT, "FWHM", &FWHM, NULL, &status);
+		printf("FWHM=%f\n", FWHM);
 		
 #ifndef TEST
 		// Computing time offsets from the first image:
@@ -102,12 +108,12 @@ int main(int argc, char **argv)
 #endif		
 		
 		fits_get_img_dim(f0, &naxis, &status);
-		fits_get_img_size(f0, 3, naxes, &status);
+		fits_get_img_size(f0, naxis, naxes, &status);
 		fits_error(status);
 		
-		if (naxis != 3 || naxes[2] != 3) 
+		if (naxis != 2) 
 		{
-			fprintf(stderr, "Error: expected RGB FITS image\n");
+			fprintf(stderr, "Error: expected B&W FITS image\n");
 			return EXIT_FAILURE;
 		}
 	
@@ -117,7 +123,7 @@ int main(int argc, char **argv)
 		{
 			Nx0 = Nx;
 			Ny0 = Ny;
-			Nc = 3;
+			Nc = 1;
 			Npix = (long)Nx * Ny;
 			buf0 = (float *)malloc(sizeof(float) * Npix * Nc);
 		}
@@ -134,7 +140,7 @@ int main(int argc, char **argv)
 		fits_error(status);
 		fits_close_file(f0, &status);		
 
-		image_bw(buf0, Npix, Nc);  // Turn the image into black and white
+//		image_bw(buf0, Npix, Nc);  // Turn the image into black and white
 
 //		float crop_fraction = 1.0;
 //		crop(buf0, &Nx, &Ny, &Npix, crop_fraction);
@@ -143,9 +149,9 @@ int main(int argc, char **argv)
 		int NTx = 5;
 		int NTy = (int)((float)NTx / (float)Nx * (float)Ny + 0.5);
 //		printf("Background model: %d x %d tiles, %d x %d pixels each\n", NTy, NTx, Ny/NTy, Nx/NTx);
-		subtract_background(i_image, buf0, Nx, Ny, NTx, NTy);
+		subtract_background(i_image, N_images, buf0, Nx, Ny, NTx, NTy, 0.0);
 		
-		gauss_blur(i_image, N_images, Nx, Ny, buf0, buf0, sgm_Gauss);
+//		gauss_blur(i_image, N_images, Nx, Ny, buf0, buf0, sgm_Gauss);
 
 //		dump_fits(Nx, Ny, 1, buf0, "image.fits");
 		
@@ -281,13 +287,14 @@ int main(int argc, char **argv)
 	long Npix2;
 	int kk;
 	sigma_clipping(h_test_image, Npix, 3.0, &p0, &sgm, &Npix2, &kk);
-	dump_fits(Nx, Ny, 1, h_test_image, "zero_shift.fits");
+	dump_fits(Nx, Ny, 1, h_test_image, "zero_shift.fit");
 	printf("\n Zero shift stack: p=%e, sgm=%e\n\n", p0, sgm);
+	/*
 	long *hist = (long *)malloc(sizeof(long)*(BIN_MAX-BIN_MIN+1));
 	compute_histogram(h_test_image, Npix, sgm, &p_min_std, hist);
 	printf("(0,0) vector: p_min_std=%f\n", p_min_std);
-
-
+*/
+/*
 	find_kernel_parameters(RMIN, RMIN, MQ, Nx, Ny, &Grid_size, &Ix1, &Iy1);
 	p_min = 1e30;
 	motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,RMIN,RMIN,MQ,p_min,d_dt,d_test_image,d_list,1,d_Pixel_counter,Nx,Ny);
@@ -305,12 +312,11 @@ int main(int argc, char **argv)
 	printf("\n Rmax shift stack: p=%e, sgm=%e\n\n", p0, sgm);
 	compute_histogram(h_test_image, Npix, sgm, &p_min_std, hist);
 	printf("(Rmax,Rmax) vector: p_min_std=%f\n", p_min_std);
-
-	free(hist);
-//	exit(0);
+*/
+//	free(hist);
 
 //	p_min = p_min_std * sgm;
-	p_min = 4 * 3.722e-4;
+	p_min = 1 * 3.722e-4;
 
 
 	cudaDeviceSynchronize();
@@ -436,11 +442,17 @@ int main(int argc, char **argv)
 
 				motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,
 				Jx,Jy,MQ,p_min,d_dt,d_test_image,d_list,1,d_Pixel_counter,Nx,Ny);
-
+				
+				for (int i=0; i<Nx*Ny; i++)
+				{
+					h_test_image[i] = 0.0;
+				}
+				
 				ERR( cudaMemcpy2D(h_test_image, Ny*sizeof(float), d_test_image, pitch, Ny*sizeof(float), Nx, cudaMemcpyDeviceToHost) )
 				cudaDeviceSynchronize();
 				sprintf(fits_name,"cloud_%03d.fit", icloud);
-				dump_fits(Nx, Ny, 1, h_test_image, fits_name);
+				
+				save_cloud_fits(Nx, Ny, 1, h_test_image, fits_name, name0, cloud, icloud);
 			}
 			free(Cluster_index);
 	

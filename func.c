@@ -598,7 +598,7 @@ void sigma_clipping(float *image, long plane_pixels, double Nsigma, double *p0, 
 	void dump_fits (int Nx, int Ny, int Nc, float *img, const char *name)
 	// Dump a 2D image into a FITS file (for debugging)
 	{
-		char buffer[50];
+		char buffer[100];
 		int status=0; 
 		float bias = 0.03;
 		
@@ -609,7 +609,10 @@ void sigma_clipping(float *image, long plane_pixels, double Nsigma, double *p0, 
 		
 		for (long i = 0; i < Npixels; i++)
 		{
-			img1[i] = img[i] + bias;
+			if (img[i] > MASK)
+				img1[i] = img[i] + bias;
+			else
+				img1[i] = bias;
 		}
 		
 		sprintf(buffer, "rm -f %s >/dev/null", name);
@@ -618,12 +621,19 @@ void sigma_clipping(float *image, long plane_pixels, double Nsigma, double *p0, 
 		fitsfile *fk;
 		fits_create_file(&fk, name, &status);
 		fits_error(status);
+		
+		
+		
 		long nelem1  = (long)Nx * Ny * Nc;
 //		long naxes[3] = {Ny, Nx, Nc};
 //		fits_create_img(fk, FLOAT_IMG, 3, naxes, &status);
 		long naxes[2] = {Ny, Nx};
 		fits_create_img(fk, FLOAT_IMG, 2, naxes, &status);
 		fits_error(status);
+
+		sprintf(buffer, "1500:800:1600:900:-1.0:Cloud 0:");
+		fits_write_key(fk, TSTRING, "ANNOTATE", buffer, NULL, &status);
+
 		long fpixel = 1;
 		fits_write_img(fk, TFLOAT, fpixel, nelem1, img1, &status);
 		fits_error(status);
@@ -707,7 +717,7 @@ void rebin(int i_image, float *buf0, int *Nx, int *Ny, long *Npix, float** h_ima
 }
 /* ------------------------------------------------ */
 
-	void subtract_background(int i_image, float *img, int Nx, int Ny, int NTx, int NTy)
+	void subtract_background(int i_image, int N_images, float *img, int Nx, int Ny, int NTx, int NTy, float bias)
 	/*  Subtracting background from an image defined on NTx x NTy tiles (not exactly square), 
 	using bilinear interpolation. Within each tile, the background level is estimated using
 	3-sigma clipping algorithm.
@@ -837,20 +847,6 @@ void rebin(int i_image, float *buf0, int *Nx, int *Ny, long *Npix, float** h_ima
 		ix1 = NTx; iy1 = NTy; i1 = ix1*(NTy+2) + iy1;
 		B[i0] = B[i1];
 		
-/*  Printing the background matrix
-		for (int ix=0; ix<NTx+2; ix++)
-		{
-			for (int iy=0; iy<NTy+2; iy++)
-			{
-				printf("%e ", B[ix*(NTy+2) + iy]);
-			}
-			printf("\n");
-		}
-*/		
-
-		// Global (computed over all the tiles) bias and std:
-//		double p0_all = sum_all / Npix_all;
-//		double sgm_all = sqrt(sum2_all / Npix_all - p0_all * p0_all);	
 
 		// Subtracting the background
 		// (Bilinear interpolation model for background)
@@ -880,10 +876,15 @@ void rebin(int i_image, float *buf0, int *Nx, int *Ny, long *Npix, float** h_ima
 				
 				if (img[jx*Ny+jy] > MASK)
 					// Subtracting the bilinear interpolated value of the background:
-					img[jx*Ny+jy] = img[jx*Ny+jy] - Bp;
+					img[jx*Ny+jy] = img[jx*Ny+jy] - Bp + bias;
 			}
 		}
 		
+	if (i_image == N_images-1)
+	{
+		free(B);
+	}
+
 		return;
 	}
 
@@ -904,149 +905,6 @@ int date2mjd (int yr, int mn, int dy) {
   return(rv);
 }
 
-/* ------------------------------------------------ */
-/*
-	void cluster_analysis_2D(int i_image, float *img, int Nx, int Ny, )
-	// Carrying out cluster analysis in 2D on img. Finding all bright masked stars.
-	Output: 
-	//
-	{
-		int *members = (int *)malloc(Nx*Ny*sizeof(int));
-		int *next_members = (int *)malloc(Nx*Ny*sizeof(int));
-		
-		long Npix = Nx * Ny;
-
-		int i_max, del, pixel_is_neighbour, N_next;
-		int counter = -1;
-		
-		int MEMBER = -200;
-		int MEMBER0 = -201;
-		
-		int ix = {0, 0, -1, 1};
-		int iy = {-1, 1, 0, 0};
-		
-		for (long i=0; i<Npix; i++)
-		{
-			if (img[i]<MASK && img[i]>MEMBER)
-				// We found a masked pixel which is not a part of a cluster yet
-				{					
-					counter++;  // Incrementing the cluster counter
-					img[i] = MEMBER0;
-
-					// Initial list of cluster members contains only the first pixel:
-					members[0] = i;			
-					int N_members = 1;
-					
-					while loop
-
-					N_next = 0;
-					
-					for (int j=0; j<N_members; j++)
-					{
-						int ix0 = members[i] / Ny;
-						int iy0 = members[i] % Ny;
-						for (int k=0; k<4; k++)
-						// Cycle over 4 neighbours
-						{
-							int ix1 = ix0 + ix[k];
-							int iy1 = iy0 + iy[k];
-							if (ix1>=0 && ix1<=Nx && iy1>=0 && iy1<=Ny) 
-							{
-								int im = ix1*Ny+iy1;
-								if (img[im]<MASK && img[im]>MEMBER)
-								// We found a neigbour which is masked and not in a cluster yet
-								{
-									N_next++;
-									next_members[N_next-1] = im;
-									N_members++;
-									members[N_members-1] = im;
-									img[im] = MEMBER0;
-								}
-							}
-						}
-					}
-						
-						
-			
-			// The while loop to go over iterations of members
-			do
-			{
-				N_next = 0;
-				// Finding all cluster members iteratively
-				for (int i=0; i<Pixel_counter; i++)
-				{
-					if (Cluster_index[i] == -1)
-					{
-						pixel_is_neighbour = 0;
-						for (int j=0; j<N_members; j++)
-						{
-							// Computing the closeness parameter
-							int cl = 0;
-							
-							del = abs(list[members[j]].Jx-list[i].Jx);
-							if (del < 2)
-								cl = cl + del;
-							else
-								continue;
-								
-							del = abs(list[members[j]].Jy-list[i].Jy);
-							if (del < 2)
-								cl = cl + del;
-							else
-								continue;
-								
-							del = abs(list[members[j]].ix-list[i].ix);
-							if (del < 2)
-								cl = cl + del;
-							else
-								continue;
-								
-							del = abs(list[members[j]].iy-list[i].iy);
-							if (del < 2)
-								cl = cl + del;
-							else
-								continue;
-								
-							// Accepting the pixel as the new cluster member if it's close enough:
-							if (cl>0 && cl <= CL_MAX)
-							{
-								pixel_is_neighbour = 1;
-								break;
-							}											
-						}
-						
-						if (pixel_is_neighbour == 1)
-						{							
-							Cluster_index[i] = counter;
-							N_next++;
-							next_members[N_next-1] = i;												
-						}										
-					}
-				}
-				
-				// Copying the next_members list to current members list:
-				if (N_next > 0)
-				{
-					N_members = N_next;
-					for (int j=0; j<N_members; j++)
-					{
-						members[j] = next_members[j];
-					}
-				}			
-			}
-			while(N_next > 0);
-			
-			printf("Found cluster %d\n", counter);
-			
-		}
-		while(i_max != -1);
-		
-		printf("Found %d clusters\n", counter+1);
-
-		return;
-		
-	}
-	*/
 /* ------------------------------------------------ */
 
 void compute_histogram(float *image, long Npix, float sgm, float *p_min_std, long *hist)
@@ -1099,4 +957,20 @@ void compute_histogram(float *image, long Npix, float sgm, float *p_min_std, lon
 	
 	return;
 	
+}
+
+/* ------------------------------------------------ */
+
+void borders(float *img, int Nx, int Ny, int BW)
+{
+		
+	for (int x=0; x<Nx; x++)
+	{
+		for (int y=0; y<Ny; y++)
+		{
+			if (x<BW || x>=Nx-BW || y<BW || y>=Ny-BW)
+				img[x*Ny+y] = MASK0;
+		}
+	}
+	return;
 }

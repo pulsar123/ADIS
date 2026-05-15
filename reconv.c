@@ -22,6 +22,7 @@ int main(int argc, char **argv)
 		printf(" Optional arguments [default value]:\n\n");
 		printf(" -bias value    :  bias for the output image [0]\n");
 		printf(" -blur FWHM     :  FWHM for the Gaussian blur for the input images [0]\n");
+		printf(" -border width  :  mask out the output image border, the width is in kernel_radius units [0]\n");
 		printf(" -bmax value    :  erase image pixels above this many master std [0]\n");
 		printf(" -k image_name  :  output kernel image\n");
 		printf(" -mask          :  use a negative number mask with -bmax\n");
@@ -45,6 +46,8 @@ int main(int argc, char **argv)
 	double bmax = -1.0;
 	int subtract_only = 0;
 	int mask = 0;
+	float border_width = 0.0;
+	int mask_borders = 0;
 	
 	int N_obligatory = 4; // Number of obligatory arguments
 	int j = 1;
@@ -161,6 +164,19 @@ int main(int argc, char **argv)
 			perform_blur = 1;
 		}						
 
+		// Border width in R units:
+		if (strcmp(argv[j],"-border") == 0)
+		{
+			j++;
+			if (argv[j][0] == '-' || j>=argc)
+			{
+				error = j-1;
+				break;
+			}
+			border_width = atof(argv[j]);
+			mask_borders = 1;
+		}						
+
 		// No brightness rescale (0 by default):
 		if (strcmp(argv[j],"-no_rescale") == 0)
 		{
@@ -245,6 +261,7 @@ int main(int argc, char **argv)
                   plane_pixels * Nc, NULL, buf0, NULL, &status);
     fits_error(status);
     fits_close_file(f0, &status);		
+	image_bw(buf0, plane_pixels, 3); // converting to B&W
 	}
 	
 	#pragma omp section
@@ -253,9 +270,11 @@ int main(int argc, char **argv)
     fits_read_img(f1, TFLOAT, 1,
                   plane_pixels * Nc, NULL, buf1, NULL, &status);
     fits_error(status);				
+	image_bw(buf1, plane_pixels, 3);  // converting to B&W
 	}		
 	} // pragma section
 
+	Nc = 1; // Now working in B&W format
 
 	char buffer[50];
 	sprintf(buffer, "rm -f %s >/dev/null", file_out);
@@ -316,7 +335,7 @@ int main(int argc, char **argv)
 	// Full processing, separately for each channel (R, G, B)
 	#pragma omp parallel
 	#pragma omp for reduction(+:Sinc) ordered
-	for (int c=0; c<3; c++) 
+	for (int c=0; c<Nc; c++) 
 	
 	{
 		double S = 1;
@@ -412,7 +431,7 @@ int main(int argc, char **argv)
 			for (long i=0; i<plane_pixels; i++)
 			{
 				if (img0[ithread*plane_pixels+i]>MASK && img1[ithread*plane_pixels+i]>MASK)
-					outbuf[c*plane_pixels + i] = outbias + img1[ithread*plane_pixels+i] - img0[ithread*plane_pixels+i];	
+					outbuf[c*plane_pixels + i] = img1[ithread*plane_pixels+i] - img0[ithread*plane_pixels+i];	
 				else
 					outbuf[c*plane_pixels + i] = MASK0;
 			}
@@ -439,9 +458,10 @@ int main(int argc, char **argv)
 			if (bmax > 0)
 			{
 				// p=1 when the pixel brightness =bmax in sgm_master units, in the blurred master image
-				float p = sqrt(pow(cropped[i]/sgm_master[0],2)
-					+pow(cropped[plane_pixels + i]/sgm_master[1],2)
-					+pow(cropped[2*plane_pixels + i]/sgm_master[2],2)) / bmax;
+//				float p = sqrt(pow(cropped[i]/sgm_master[0],2)
+//					+pow(cropped[plane_pixels + i]/sgm_master[1],2)
+//					+pow(cropped[2*plane_pixels + i]/sgm_master[2],2)) / bmax;
+				float p = cropped[i]/sgm_master[0] / bmax;
 
 				// Transitional brightness range for the master image:
 				double PM_DELTA = 0.1; // Determines the half-width of the transitional brightness range
@@ -466,13 +486,12 @@ int main(int argc, char **argv)
 			}
 			
 			
-			// Adding fixed bias outbias:
-			for (int c=0; c<3; c++)
+			for (int c=0; c<Nc; c++)
 			{
 				if (mask && w<0.5)
 					outbuf[c*plane_pixels + i] = MASK0;  // masked pixel value = -101
 				else
-					outbuf[c*plane_pixels + i] = outbias + w*outbuf[c*plane_pixels + i];
+					outbuf[c*plane_pixels + i] = w*outbuf[c*plane_pixels + i];
 			}
 			
 			Sinc = Sinc + w;
@@ -495,19 +514,48 @@ int main(int argc, char **argv)
     free(img);
     free(buf0);
 
+	if (mask_borders)
+		borders(outbuf, Nx, Ny, (int)(border_width*R));
+
+	// Background model has these many tiles along each dimension:
+	int NTx = 5;
+	int NTy = (int)((float)NTx / (float)Nx * (float)Ny + 0.5);
+//		printf("Background model: %d x %d tiles, %d x %d pixels each\n", NTy, NTx, Ny/NTy, Nx/NTx);
+	subtract_background(0, 0, outbuf, Nx, Ny, NTx, NTy, outbias);
 
     /* ---------- Write output FITS ---------- */
 	
 	if (dump_kernel)
 	{
-		dump_fits(Px, Py, 3, kernel, fkernel);
+		dump_fits(Px, Py, 1, kernel, fkernel);
 	}
 
-	long fpixel = 1;
-	long nelem  = (long)Nx * Ny * 3;
+	// Writing a BW output image
 
-	fits_write_img(fout, TFLOAT, fpixel, nelem, outbuf, &status);
-    fits_error(status);
+	fits_write_key(fout, TFLOAT, "FWHM", &FWHM, "asteroid_search", &status);
+	fits_write_key(fout, TDOUBLE, "R", &R, "asteroid_search", &status);
+	fits_write_key(fout, TDOUBLE, "BMAX", &bmax, "asteroid_search", &status);
+	fits_write_key(fout, TDOUBLE, "BIAS", &outbias, "asteroid_search", &status);
+
+	int naxis_out = 2;
+    fits_update_key(fout, TINT, "NAXIS", &naxis_out,
+                    "number of array dimensions", &status);
+		fits_error(status);
+	long NY = Ny;
+	fits_update_key(fout, TLONG, "NAXIS1", &NY,
+                    "length of x axis", &status);
+		fits_error(status);
+	long NX = Nx;
+	fits_update_key(fout, TLONG, "NAXIS2", &NX,
+                    "length of y axis", &status);
+		fits_error(status);
+	fits_delete_key(fout, "NAXIS3", &status);
+		fits_error(status);
+	long fpixel = 1;
+	long nelem1  = (long)Nx * Ny;	
+	fits_write_img(fout, TFLOAT, fpixel, nelem1, outbuf, &status);
+	fits_error(status);
+
 
     fits_close_file(fout, &status);
 	fits_close_file(f1, &status);

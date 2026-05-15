@@ -24,8 +24,8 @@
 #define CL_MAX 4
 
 // Mask test value:
-#define MASK -100.0
-#define MASK0 (MASK-1)
+#define MASK -100.0  // for if() statements
+#define MASK0 -101.0 // for assigning
 
 // Histogram parameters:
 #define D_SGM 0.25 // bin size (in sigma units)
@@ -101,12 +101,13 @@ void crop(float *buf0, int *Nx, int *Ny, long *Npix, float crop_fraction);
 
 void rebin(int i_image, float *buf0, int *Nx, int *Ny, long *Npix, float** h_image);
 
-void subtract_background(int i_image, float *img, int Nx, int Ny, int NTx, int NTy);
+void subtract_background(int i_image, int N_images, float *img, int Nx, int Ny, int NTx, int NTy, float bias);
 
 int date2mjd (int yr, int mn, int dy);
 
 void compute_histogram(float *image, long Npix, float sgm, float *p_min_std, long *hist);
-					 
+	
+void borders(float *img, int Nx, int Ny, int BW);	
 
 #ifdef _OPENMP
 void init_all_locks();
