@@ -76,7 +76,9 @@ int main(int argc, char **argv)
 //	float sgm_Gauss = FWHM / sqrt(8*log(2.0));
 //	printf("sgm_Gauss = %f\n", sgm_Gauss);
 
-	gettimeofday (&tdr2, NULL);  		
+	gettimeofday (&tdr2, NULL); 
+
+	double bias = 0.0;
 	
 	// Reading input FITS images one by one, using cudaMemcpyAsync to do concurrent copying to the GPU
 	for (int i_image=0; i_image<N_images; i_image++)
@@ -91,7 +93,7 @@ int main(int argc, char **argv)
 		fits_error(status);
 		
 		fits_read_key(f0, TFLOAT, "FWHM", &FWHM, NULL, &status);
-		printf("FWHM=%f\n", FWHM);
+		fits_read_key(f0, TDOUBLE, "BIAS", &bias, NULL, &status);
 		
 #ifndef TEST
 		// Computing time offsets from the first image:
@@ -140,21 +142,6 @@ int main(int argc, char **argv)
 		fits_error(status);
 		fits_close_file(f0, &status);		
 
-//		image_bw(buf0, Npix, Nc);  // Turn the image into black and white
-
-//		float crop_fraction = 1.0;
-//		crop(buf0, &Nx, &Ny, &Npix, crop_fraction);
-
-		// Background model has these many tiles along each dimension:
-		int NTx = 5;
-		int NTy = (int)((float)NTx / (float)Nx * (float)Ny + 0.5);
-//		printf("Background model: %d x %d tiles, %d x %d pixels each\n", NTy, NTx, Ny/NTy, Nx/NTx);
-		subtract_background(i_image, N_images, buf0, Nx, Ny, NTx, NTy, 0.0);
-		
-//		gauss_blur(i_image, N_images, Nx, Ny, buf0, buf0, sgm_Gauss);
-
-//		dump_fits(Nx, Ny, 1, buf0, "image.fits");
-		
 		if (i_image == 0)
 			#ifdef MALLOCHOST
 			ERR( cudaMallocHost(&h_image1, sizeof(float)*Npix) )
@@ -162,7 +149,7 @@ int main(int argc, char **argv)
 			h_image1 = (float *)malloc(sizeof(float)*Npix);
 			#endif
 		
-		rebin(i_image, buf0, &Nx, &Ny, &Npix, &h_image1);
+		rebin(buf0, &Nx, &Ny, &Npix, &h_image1, bias);
 		
 		// x is for the rows, y is for columns
 		// This is the host-device sync point
@@ -316,7 +303,7 @@ int main(int argc, char **argv)
 //	free(hist);
 
 //	p_min = p_min_std * sgm;
-	p_min = 1 * 3.722e-4;
+	p_min = 0.75 * 3.722e-4;
 
 
 	cudaDeviceSynchronize();
@@ -426,6 +413,8 @@ int main(int argc, char **argv)
 			// Computing stats for the ICLOUD_STATS_MAX brightest clouds			
 			cloud_stats(h_list, h_Pixel_counter, N_cloud, Cluster_index, cloud);
 
+			dim3 Grid_size2 = {(Nx+Block_size.x-1)/Block_size.x, (Nx+Block_size.y-1)/Block_size.y};
+
 			// Saving fits stacks for the most significant motion detections (clouds)
 			int NC;
 			char fits_name[100];
@@ -435,18 +424,19 @@ int main(int argc, char **argv)
 				NC = ICLOUD_FITS_MAX;
 			for (int icloud=0; icloud<NC; icloud++)
 			{
+				for (int i=0; i<Nx*Ny; i++)
+					h_test_image[i] = MASK0;
+				cudaMemcpy2DAsync(d_test_image, pitch, h_test_image, Ny*sizeof(float), Ny*sizeof(float), Nx, cudaMemcpyHostToDevice);
+
 				int imax = cloud[icloud].imax;
 				int Jx = h_list.Jx[imax];
 				int Jy = h_list.Jy[imax];
 				find_kernel_parameters(Jx, Jy, MQ, Nx, Ny, &Grid_size, &Ix1, &Iy1);
 
+				erase_image <<<Grid_size2, Block_size>>> (d_test_image, pitch, Nx, Ny, bias);
+
 				motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,
 				Jx,Jy,MQ,p_min,d_dt,d_test_image,d_list,1,d_Pixel_counter,Nx,Ny);
-				
-				for (int i=0; i<Nx*Ny; i++)
-				{
-					h_test_image[i] = 0.0;
-				}
 				
 				ERR( cudaMemcpy2D(h_test_image, Ny*sizeof(float), d_test_image, pitch, Ny*sizeof(float), Nx, cudaMemcpyDeviceToHost) )
 				cudaDeviceSynchronize();

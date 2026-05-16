@@ -98,4 +98,6 @@ void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *C
 
 void save_cloud_fits (int Nx, int Ny, int Nc, float *img, const char *name, const char *name0, Cloud *cloud, int i_cloud);
 
+__global__ void erase_image (float *image, size_t pitch, int Nx, int Ny, double bias);
+
 #endif

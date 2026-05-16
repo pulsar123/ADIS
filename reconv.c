@@ -21,9 +21,10 @@ int main(int argc, char **argv)
 		printf(" %s  -i input_image  -m master_image  -o output_image  -R kernel_radius\n\n", argv[0]);
 		printf(" Optional arguments [default value]:\n\n");
 		printf(" -bias value    :  bias for the output image [0]\n");
-		printf(" -blur FWHM     :  FWHM for the Gaussian blur for the input images [0]\n");
+		printf(" -blur FWHM     :  FWHM for the Gaussian blur for the input images\n");
 		printf(" -border width  :  mask out the output image border, the width is in kernel_radius units [0]\n");
-		printf(" -bmax value    :  erase image pixels above this many master std [0]\n");
+		printf(" -bmax value    :  erase image pixels above this many master std\n");
+		printf(" -grow_mask sgm :  grow star masks using gaussian with sgm size (FWHM units)\n");
 		printf(" -k image_name  :  output kernel image\n");
 		printf(" -mask          :  use a negative number mask with -bmax\n");
 		printf(" -no_rescale    :  do not rescale brightness\n");
@@ -48,6 +49,8 @@ int main(int argc, char **argv)
 	int mask = 0;
 	float border_width = 0.0;
 	int mask_borders = 0;
+	int grow_mask = 0;
+	float mask_sgm = 0.0;
 	
 	int N_obligatory = 4; // Number of obligatory arguments
 	int j = 1;
@@ -194,6 +197,18 @@ int main(int argc, char **argv)
 			bmax = atof(argv[j]);
 		}						
 
+		if (strcmp(argv[j],"-grow_mask") == 0)
+		{
+			j++;
+			if (argv[j][0] == '-' || j>=argc)
+			{
+				error = j-1;
+				break;
+			}
+			mask_sgm = atof(argv[j]);
+			grow_mask = 1;
+		}						
+
 		j++;
 	} // /end of argv while loop
 	
@@ -329,7 +344,7 @@ int main(int argc, char **argv)
 	double sgm_master[3];
 	
 	float sgm_blur = FWHM / sqrt(8*log(2.0));
-	printf("sgm_blur = %f\n", sgm_blur);
+//	printf("sgm_blur = %f\n", sgm_blur);
 
 
 	// Full processing, separately for each channel (R, G, B)
@@ -496,13 +511,7 @@ int main(int argc, char **argv)
 			
 			Sinc = Sinc + w;
 		}
-		
-
-		if (verbose && bmax >= 0.0)
-		{
-			printf("\nExcluded pixels fraction: %f\n",(plane_pixels-Sinc)/plane_pixels);
-		}
-		
+				
 		// Cluster analysis to find all masked areas
 		
 		
@@ -514,14 +523,26 @@ int main(int argc, char **argv)
     free(img);
     free(buf0);
 
-	if (mask_borders)
-		borders(outbuf, Nx, Ny, (int)(border_width*R));
-
+	// Bilinear background subtraction, and adding the bias:
 	// Background model has these many tiles along each dimension:
 	int NTx = 5;
 	int NTy = (int)((float)NTx / (float)Nx * (float)Ny + 0.5);
 //		printf("Background model: %d x %d tiles, %d x %d pixels each\n", NTy, NTx, Ny/NTy, Nx/NTx);
 	subtract_background(0, 0, outbuf, Nx, Ny, NTx, NTy, outbias);
+
+	// Grow masked stars if requested:
+	int N_excluded = 0;
+	if (grow_mask)
+		grow_masked_stars(outbuf, Nx, Ny, FWHM*mask_sgm, &N_excluded);
+	
+	if (verbose && bmax >= 0.0)
+	{
+		printf("\nExcluded pixels fraction: %f\n", (float)N_excluded/plane_pixels);
+	}
+
+
+	if (mask_borders)
+		borders(outbuf, Nx, Ny, (int)(border_width*R));
 
     /* ---------- Write output FITS ---------- */
 	

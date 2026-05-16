@@ -813,7 +813,21 @@ void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *C
 		return;
 	}
 	
+/* ------------------------------------------------ */
 
+__global__ void erase_image (float *image, size_t pitch, int Nx, int Ny, double bias)
+{
+	int x = threadIdx.x + blockIdx.x*blockDim.x;
+	int y = threadIdx.y + blockIdx.y*blockDim.y;
+	
+	if (x>=Nx || y>=Ny)
+		return;
+
+	float *row = (float *)((char*)image + x * pitch);
+	row[y]  = bias;
+	
+	return;
+}
 
 /* ------------------------------------------------ */
 

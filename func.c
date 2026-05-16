@@ -699,17 +699,12 @@ void crop(float *img, int *Nx, int *Ny, long *Npix, float crop_fraction)
 /* ------------------------------------------------ */
 
 
-void rebin(int i_image, float *buf0, int *Nx, int *Ny, long *Npix, float** h_image)
+void rebin(float *buf0, int *Nx, int *Ny, long *Npix, float** h_image, double bias)
 {
-	if (i_image == 0)
-	{
-		// We use cudaMallocHost instead of malloc to put the array in the pinned host memory
-//		ERR( cudaMallocHost((void**)h_image, sizeof(float)* *Npix) )
-	}
 	
 	for (long i=0; i<*Npix; i++)
 	{
-		(*h_image)[i] = buf0[i];
+		(*h_image)[i] = buf0[i] - bias;
 	}
 	
 	return;
@@ -974,3 +969,37 @@ void borders(float *img, int Nx, int Ny, int BW)
 	}
 	return;
 }
+/* ------------------------------------------------ */
+
+
+void grow_masked_stars(float *img, int Nx, int Ny, float mask_sgm, int *N_excluded)
+{
+	float *mask = (float *)malloc(Nx*Ny*sizeof(float));
+		
+	for (int i=0; i<Nx*Ny; i++)
+		if (img[i] > MASK)
+			mask[i] = 0.0;
+		else
+			mask[i] = 1.0;
+		
+	gauss_blur(0, 1, Nx, Ny, mask, mask, mask_sgm);
+
+	float vmax = -100;
+	for (int i=0; i<Nx*Ny; i++)
+		if (mask[i] > vmax)
+			vmax = mask[i];
+		
+//	printf("vmax=%e\n", vmax);
+	
+	for (int i=0; i<Nx*Ny; i++)
+	{
+		if (mask[i] > 0.1*vmax)
+			img[i] = MASK0;
+		if (img[i] < MASK)
+			(*N_excluded)++;
+	}
+	
+	free(mask);
+}
+
+/* ------------------------------------------------ */

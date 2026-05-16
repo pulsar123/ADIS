@@ -99,7 +99,7 @@ void image_bw(float *image, long Npix, int Nc);
 
 void crop(float *buf0, int *Nx, int *Ny, long *Npix, float crop_fraction);
 
-void rebin(int i_image, float *buf0, int *Nx, int *Ny, long *Npix, float** h_image);
+void rebin(float *buf0, int *Nx, int *Ny, long *Npix, float** h_image, double bias);
 
 void subtract_background(int i_image, int N_images, float *img, int Nx, int Ny, int NTx, int NTy, float bias);
 
@@ -108,6 +108,8 @@ int date2mjd (int yr, int mn, int dy);
 void compute_histogram(float *image, long Npix, float sgm, float *p_min_std, long *hist);
 	
 void borders(float *img, int Nx, int Ny, int BW);	
+
+void grow_masked_stars(float *img, int Nx, int Ny, float mask_sgm, int *N_excluded);
 
 #ifdef _OPENMP
 void init_all_locks();
