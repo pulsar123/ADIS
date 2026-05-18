@@ -752,7 +752,7 @@ void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *C
 		
 		float rad_xy = sqrt(pow((ix_max-ix_min)/2.0,2) + pow((ix_max-ix_min)/2.0,2));
 		float rad_J = sqrt(pow((Jx_max-Jx_min)/2.0,2) + pow((Jx_max-Jx_min)/2.0,2));
-		fprintf(fp, "%4d %11e %4d %4d %4d %4d %8d %4d %11e %8.2f %8.2f\n", icloud, pmax, h_list.ix[imax], h_list.iy[imax], h_list.Jx[imax], h_list.Jy[imax], imax, N, mass, rad_xy, rad_J);
+		fprintf(fp, "%4d %11e %4d %4d %4d %4d %4d %11e %8.2f %8.2f\n", icloud, pmax, h_list.ix[imax], h_list.iy[imax], h_list.Jx[imax], h_list.Jy[imax], N, mass, rad_xy, rad_J);
 	}
 	
 	fclose(fp);
@@ -831,6 +831,115 @@ __global__ void erase_image (float *image, size_t pitch, int Nx, int Ny, double 
 
 /* ------------------------------------------------ */
 
+void create_mosaic (int Nx, int Ny, List list, unsigned int Pixel_counter, int *Cluster_index, int NCmax, const char *name0, Cloud *cloud)
+// Creating a single fits files mosaic.fit which displays the detection pixels corresponding to the top
+// NCmax clouds, with corresponding ANNOTA boxes (for ASTAP)
+{
+	char buffer[100];
+	const char *name = "mosaic.fit";
+	int status=0; 
+	float bias = 0.0;
+		
+	float *mosaic = (float *)malloc(3*Nx*Ny*sizeof(float));	
+	
+	int Box_size = 50; // box size in pixels
+	int BS2 = Box_size/2;
+
+	long Npix = Nx *  Ny;
+	
+	// Initializing the fits image to the bias level
+	for (int i=0; i<3*Npix; i++)
+		mosaic[i] = bias;
+	
+	
+	// Saving the significant pixels from the top NCmax cloud to the image
+	for (int i=0; i<Pixel_counter; i++)
+	{
+		if (Cluster_index[i] < NCmax)
+		{
+			int x = list.ix[i];
+			int y = list.iy[i];
+			int ic = Cluster_index[i];			
+			float p = list.p[i]/cloud[ic].pmax;
+			float r = ic / 3;
+			float g = ic % 3;
+			float b = (ic+2) % 2;
+			float s = r + g + b;
+			mosaic[x*Ny+y] = p*r/s + bias;
+			mosaic[Npix + x*Ny+y] = p*g/s + bias;
+			mosaic[2*Npix + x*Ny+y] = p*b/s + bias;
+		}
+	}
+		
+	sprintf(buffer, "rm -f %s >/dev/null", name);
+	if (system(buffer))
+		printf("Could not delete the file %s\n", name);
+	fitsfile *fk, *f0;
+	
+	fits_open_file(&f0, name0, READONLY, &status);
+	fits_error(status);
+	
+	fits_create_file(&fk, name, &status);
+	fits_error(status);
+	
+//	fits_copy_header(f0, fk, &status);
+//	fits_error(status);
+		
+	long naxes[3];
+	int bitpix, naxis_in;
+	fits_get_img_param(f0, 2, &bitpix, &naxis_in, naxes, &status);
+	fits_error(status);
+	naxes[2] = 3;
+	fits_create_img(fk, bitpix, 3, naxes, &status);
+	fits_error(status);
+	int naxis_out = 3;
+    fits_write_key(fk, TINT, "NAXIS", &naxis_out,
+                    "number of array dimensions", &status);
+	fits_error(status);
+	
+	int nkeys, i;
+	char card[FLEN_CARD];
+	fits_get_hdrspace(f0, &nkeys, NULL, &status);
+	
+	for (i = 1; i <= nkeys; i++) {
+		fits_read_record(f0, i, card, &status);
+		fits_error(status);
+
+		/* Skip structural keywords */
+		if (strncmp(card, "SIMPLE  ", 8) == 0) continue;
+		if (strncmp(card, "BITPIX  ", 8) == 0) continue;
+		if (strncmp(card, "NAXIS   ", 8) == 0) continue;
+		if (strncmp(card, "NAXIS1  ", 8) == 0) continue;
+		if (strncmp(card, "NAXIS2  ", 8) == 0) continue;
+		if (strncmp(card, "NAXIS3  ", 8) == 0) continue;
+		if (strncmp(card, "EXTEND  ", 8) == 0) continue;
+		if (strncmp(card, "END     ", 8) == 0) continue;
+
+		fits_write_record(fk, card, &status);
+		fits_error(status);
+	}	
+	
+	// Creating NCmax annotation boxes
+	for (int icloud=0; icloud<NCmax; icloud++)
+	{
+		sprintf(buffer, "%d;%d;%d;%d;-1.0;%d;", cloud[icloud].iy-BS2, cloud[icloud].ix-BS2,
+		cloud[icloud].iy+BS2,cloud[icloud].ix+BS2,icloud);
+		fits_write_key(fk, TSTRING, "ANNOTATE", buffer, NULL, &status);	
+	}	
+	
+	long nelem1  = (long)Nx * Ny * 3;
+	long fpixel = 1;
+	fits_write_img(fk, TFLOAT, fpixel, nelem1, mosaic, &status);
+	fits_error(status);
+	fits_close_file(fk, &status);		
+	fits_close_file(f0, &status);		
+	free(mosaic);
+
+	return;
+}
+
+
+/* ------------------------------------------------ */
 /*
 __global__ void find_free_pixel(int *d_cloud, unsigned int Pixel_counter)
 // In the device vector d_cloud, find the first (smallest index) zero element (with no cloud assigned)

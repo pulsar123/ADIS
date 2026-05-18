@@ -100,4 +100,6 @@ void save_cloud_fits (int Nx, int Ny, int Nc, float *img, const char *name, cons
 
 __global__ void erase_image (float *image, size_t pitch, int Nx, int Ny, double bias);
 
+void create_mosaic (int Nx, int Ny, List list, unsigned int Pixel_counter, int *Cluster_index, int NCmax, const char *name0, Cloud *cloud);
+
 #endif

@@ -28,6 +28,31 @@ int main(int argc, char **argv)
 	float p_min;
 	char name0[100];
 
+
+	// Processing command line arguments
+	
+	if (argc == 1)
+	{
+		printf("\n Syntax (any order):\n\n");
+		printf(" %s  -i input_image  -m master_image  -o output_image  -R kernel_radius\n\n", argv[0]);
+		printf(" Optional arguments [default value]:\n\n");
+		printf(" -bias value    :  bias for the output image [0]\n");
+		printf(" -blur FWHM     :  FWHM for the Gaussian blur for the input images\n");
+		printf(" -border width  :  mask out the output image border, the width is in kernel_radius units [0]\n");
+		printf(" -bmax value    :  erase image pixels above this many master std\n");
+		printf(" -grow_mask sgm :  grow star masks using gaussian with sgm size (FWHM units)\n");
+		printf(" -k image_name  :  output kernel image\n");
+		printf(" -mask          :  use a negative number mask with -bmax\n");
+		printf(" -no_rescale    :  do not rescale brightness\n");
+		printf(" -subtract_only :  just subtract the master from the image\n");
+		printf(" -v             :  verbose\n");
+		printf("\n");		
+		exit(0);
+	}
+
+
+
+
 	// The motion vector space is between radii RMIN and RMAX (both are in MQ units)
 	// RMIN and RMAX should come as command line arguments
 	int RMIN = 100;
@@ -149,6 +174,7 @@ int main(int argc, char **argv)
 			h_image1 = (float *)malloc(sizeof(float)*Npix);
 			#endif
 		
+		// Subtracting bias from each image:
 		rebin(buf0, &Nx, &Ny, &Npix, &h_image1, bias);
 		
 		// x is for the rows, y is for columns
@@ -256,20 +282,20 @@ int main(int argc, char **argv)
 	
 	cudaMemGetInfo(&free_mem, &total_mem);
 	printf("GPU memory: Free: %f GB, Total: %f GB\n\n", (float)free_mem/(1024*1024*1024), (float)total_mem/(1024*1024*1024));
-	
+
+	dim3 Block_size(32,32);
+	// Used for image erase
+	dim3 Grid_size2 = {(Nx+Block_size.x-1)/Block_size.x, (Ny+Block_size.y-1)/Block_size.y};	
+	dim3 Grid_size;
 	
 	// Computing the value of sgm for a zero-shift stack
-	dim3 Block_size(32,32);
-	dim3 Grid_size;
 	int Ix1, Iy1;
 	find_kernel_parameters(0, 0, MQ, Nx, Ny, &Grid_size, &Ix1, &Iy1);
 	p_min = 1e30;
+	erase_image <<<Grid_size2, Block_size>>> (d_test_image, pitch, Nx, Ny, 0.0);
 	// Zero-offset stacking:
 	motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,0,0,MQ,p_min,d_dt,d_test_image,d_list,1,d_Pixel_counter,Nx,Ny);
-	
-	
-	ERR( cudaMemcpy2D(h_test_image, Ny*sizeof(float), d_test_image, pitch, Ny*sizeof(float), Nx, cudaMemcpyDeviceToHost) )
-		
+	ERR( cudaMemcpy2D(h_test_image, Ny*sizeof(float), d_test_image, pitch, Ny*sizeof(float), Nx, cudaMemcpyDeviceToHost) )		
 	double p0, sgm;
 	long Npix2;
 	int kk;
@@ -408,20 +434,21 @@ int main(int argc, char **argv)
 			}
 			fclose(fp);
 
+			int NC;
+			if (N_cloud < ICLOUD_FITS_MAX)
+				NC = N_cloud;
+			else
+				NC = ICLOUD_FITS_MAX;
+
 			Cloud *cloud = (Cloud *)malloc((N_cloud+1)*sizeof(Cloud));
 
 			// Computing stats for the ICLOUD_STATS_MAX brightest clouds			
 			cloud_stats(h_list, h_Pixel_counter, N_cloud, Cluster_index, cloud);
 
-			dim3 Grid_size2 = {(Nx+Block_size.x-1)/Block_size.x, (Nx+Block_size.y-1)/Block_size.y};
+			create_mosaic(Nx, Ny, h_list, h_Pixel_counter, Cluster_index, NC, name0, cloud);
 
 			// Saving fits stacks for the most significant motion detections (clouds)
-			int NC;
 			char fits_name[100];
-			if (N_cloud < ICLOUD_FITS_MAX)
-				NC = N_cloud;
-			else
-				NC = ICLOUD_FITS_MAX;
 			for (int icloud=0; icloud<NC; icloud++)
 			{
 				for (int i=0; i<Nx*Ny; i++)
@@ -433,7 +460,7 @@ int main(int argc, char **argv)
 				int Jy = h_list.Jy[imax];
 				find_kernel_parameters(Jx, Jy, MQ, Nx, Ny, &Grid_size, &Ix1, &Iy1);
 
-				erase_image <<<Grid_size2, Block_size>>> (d_test_image, pitch, Nx, Ny, bias);
+				erase_image <<<Grid_size2, Block_size>>> (d_test_image, pitch, Nx, Ny, 0.0);
 
 				motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,
 				Jx,Jy,MQ,p_min,d_dt,d_test_image,d_list,1,d_Pixel_counter,Nx,Ny);
