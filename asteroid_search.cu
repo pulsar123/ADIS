@@ -34,52 +34,98 @@ int main(int argc, char **argv)
 	if (argc == 1)
 	{
 		printf("\n Syntax (any order):\n\n");
-		printf(" %s  -i input_image  -m master_image  -o output_image  -R kernel_radius\n\n", argv[0]);
-		printf(" Optional arguments [default value]:\n\n");
-		printf(" -bias value    :  bias for the output image [0]\n");
-		printf(" -blur FWHM     :  FWHM for the Gaussian blur for the input images\n");
-		printf(" -border width  :  mask out the output image border, the width is in kernel_radius units [0]\n");
-		printf(" -bmax value    :  erase image pixels above this many master std\n");
-		printf(" -grow_mask sgm :  grow star masks using gaussian with sgm size (FWHM units)\n");
-		printf(" -k image_name  :  output kernel image\n");
-		printf(" -mask          :  use a negative number mask with -bmax\n");
-		printf(" -no_rescale    :  do not rescale brightness\n");
-		printf(" -subtract_only :  just subtract the master from the image\n");
-		printf(" -v             :  verbose\n");
+		printf(" %s  -RMIN value  -RMAX value  -Step value  image1 image2 ... \n\n", argv[0]);
+		printf("\n Obligatory arguments:\n\n");
+		printf(" -RMIN value    : shortest motion vector (in Step*FWHM units)\n");
+		printf(" -RMAX value    : longest motion vector (in Step*FWHM units)\n");
+		printf(" -Step value    : the mesh step for motion vector lengths (in FWHM units)\n");
+		printf(" image1  ...    : list of B&W input FITS images (preprocessed with reconv)\n");
+		printf("\n Optional arguments [default value]:\n\n");
+		printf(" -list file     : instead of motion object detection, use the list generated in a prior detection run\n");
 		printf("\n");		
 		exit(0);
 	}
 
-
-
-
-	// The motion vector space is between radii RMIN and RMAX (both are in MQ units)
-	// RMIN and RMAX should come as command line arguments
-	int RMIN = 100;
-	int RMAX = 101;
-
-	// Minimum pixel brightness (in master image std units) to qualify for a detection
-	// Should be input parameter:  25, 5.0
+	int RMIN = 1;
+	int RMAX = 10;
+	float Step = 0.5;
 	float p_min_std = 25;
 	
-	float FWHM = 7.7; // Needs to be provided via images' FITS headers; 7.7
-
-	// Processing command line arguments
-	
-	if (argc == 1)
-	{
-		printf("\n Syntax (any order):\n\n");
-		printf(" %s  List_of_images\n\n", argv[0]);
-		printf("\n");		
-		exit(0);
+	int N_obligatory = 3; // Number of obligatory arguments
+	int j = 1; // j counts all arguments
+	int j0 = 1; // j0 counts only known arguments
+	int error = 0;
+	int iob = 0;
+	while (j<argc)
+	{		
+		if (strcmp(argv[j],"-RMIN") == 0)
+		{
+			j++;
+			j0 = j0 + 2;
+			if (argv[j][0] == '-' || j>=argc)
+			{
+				error = j-1;
+				break;
+			}
+			RMIN = atoi(argv[j]);
+			iob++;
+		}
+		
+		if (strcmp(argv[j],"-RMAX") == 0)
+		{
+			j++;
+			j0 = j0 + 2;
+			if (argv[j][0] == '-' || j>=argc)
+			{
+				error = j-1;
+				break;
+			}
+			RMAX = atoi(argv[j]);
+			iob++;
+		}
+		
+		if (strcmp(argv[j],"-Step") == 0)
+		{
+			j++;
+			j0 = j0 + 2;
+			if (argv[j][0] == '-' || j>=argc)
+			{
+				error = j-1;
+				break;
+			}
+			Step = atof(argv[j]);
+			iob++;
+		}		
+		
+		j++;
 	}
+
+	if (error)
+	{
+		printf("\nWrong argument: %s\n\n", argv[error]);
+		exit(1);
+	}
+	if (iob < N_obligatory)
+	{
+		printf("\nSome obligatory arguments are missing!\n\n");
+		exit(1);		
+	}			
+	if (j0 > argc - 2)
+	{
+		printf("\nThere should be at least 2 images in the stack. Exiting\n\n");
+		exit(1);
+	}
+	
+	// Now j0 points to the first image name argument
+
 	
 	Is_GPU_present();
 	size_t free_mem, total_mem;
 	cudaMemGetInfo(&free_mem, &total_mem);
 	printf("GPU memory: Free: %f GB, Total: %f GB\n\n", (float)free_mem/(1024*1024*1024), (float)total_mem/(1024*1024*1024));		
 	
-	int N_images = argc - 1;
+	int N_images = argc - j0;
+//	printf ("%d %d %d %d %d\n", argc, j0, N_images, RMIN, RMAX);
 	
 	float **h_image = NULL;
 	h_image = (float **)malloc(N_images*sizeof(float*));
@@ -89,36 +135,33 @@ int main(int argc, char **argv)
 	float *h_image1 = NULL;
 	float *h_dt = NULL;
 	
-	#ifdef MALLOCHOST	
 	ERR( cudaMallocHost(&h_dt, N_images*sizeof(float*)) )
-	#else	
-	h_dt = (float *)malloc(N_images*sizeof(float*));
-	#endif
 	
 	float *d_dt = NULL;
 	ERR( cudaMalloc(&d_dt, N_images*sizeof(float*)) )
 	
-//	float sgm_Gauss = FWHM / sqrt(8*log(2.0));
-//	printf("sgm_Gauss = %f\n", sgm_Gauss);
-
 	gettimeofday (&tdr2, NULL); 
 
 	double bias = 0.0;
+	float FWHM;
 	
 	// Reading input FITS images one by one, using cudaMemcpyAsync to do concurrent copying to the GPU
 	for (int i_image=0; i_image<N_images; i_image++)
 	{		
 		if (i_image == 0)
-			sprintf(name0,"%s",argv[1]);
+			sprintf(name0,"%s",argv[j0]);
 		// Reading the next input FITS file
-		printf("\nReading file %s\n", argv[1+i_image]);
+		printf("\nReading file %s\n", argv[j0+i_image]);
 		fitsfile *f0;
-		char *file0 = argv[1+i_image];
+		char *file0 = argv[j0+i_image];
 		fits_open_file(&f0, file0, READONLY, &status);
 		fits_error(status);
 		
-		fits_read_key(f0, TFLOAT, "FWHM", &FWHM, NULL, &status);
-		fits_read_key(f0, TDOUBLE, "BIAS", &bias, NULL, &status);
+		if (i_image == 0)
+		{
+			fits_read_key(f0, TFLOAT, "FWHM", &FWHM, NULL, &status);
+			fits_read_key(f0, TDOUBLE, "BIAS", &bias, NULL, &status);
+		}
 		
 #ifndef TEST
 		// Computing time offsets from the first image:
@@ -168,11 +211,7 @@ int main(int argc, char **argv)
 		fits_close_file(f0, &status);		
 
 		if (i_image == 0)
-			#ifdef MALLOCHOST
 			ERR( cudaMallocHost(&h_image1, sizeof(float)*Npix) )
-			#else
-			h_image1 = (float *)malloc(sizeof(float)*Npix);
-			#endif
 		
 		// Subtracting bias from each image:
 		rebin(buf0, &Nx, &Ny, &Npix, &h_image1, bias);
@@ -209,7 +248,10 @@ int main(int argc, char **argv)
 	timeval_subtract (&restime, &tdr3, &tdr);
 	printf("\nImage processing time, per image: %e seconds\n\n", restime/N_images);
 		
+	// The mesh step (Motion Quantum) in pixels:
+	float MQ = Step * FWHM; 
 
+	printf("%f %f\n", Step, FWHM);
 //exit(0);
 
 #ifndef TEST
@@ -229,11 +271,6 @@ int main(int argc, char **argv)
 	int Nyb = Ny/NB;
 	// Base tile (Ixb,Iyb) covers this range of pixels (inclusive): ix=NB*Ixb..NB*(Ixb+1)-1, iy=NB*Iyb..NB*(Iyb+1)-1 
 	
-	// End of motion vectors are quantized on a mesh with this step in FWHM units:
-	// The multipler Step should be provided as a command line argument
-	float Step = 0.5;
-	// The mesh step (Motion Quantum) in pixels:
-	float MQ = Step * FWHM; 
 	
 	
 	// RMAX is limited by the image diagonal length (distance between the farthest tiles):
@@ -256,11 +293,7 @@ int main(int argc, char **argv)
 	ERR( cudaMallocPitch(&d_test_image, &pitch, (size_t)(Ny*sizeof(float)), Nx) )
 	float *h_test_image = NULL;
 
-	#ifdef MALLOCHOST
 	ERR( cudaMallocHost(&h_test_image, (size_t)(Nx*Ny*sizeof(float))) )
-	#else
-	h_test_image = (float *)malloc(Npix*sizeof(float));
-	#endif
 
 	unsigned int *d_Pixel_counter = NULL;
 	ERR (cudaMalloc(&d_Pixel_counter, sizeof(unsigned int)))
@@ -302,6 +335,41 @@ int main(int argc, char **argv)
 	sigma_clipping(h_test_image, Npix, 3.0, &p0, &sgm, &Npix2, &kk);
 	dump_fits(Nx, Ny, 1, h_test_image, "zero_shift.fit");
 	printf("\n Zero shift stack: p=%e, sgm=%e\n\n", p0, sgm);
+	
+	
+	// Testing NVECTORS motion_search vectors in the RMIN..RMAX range, computing the cumulative histogram of bright pixels,
+	// which we use to place p_min threshold
+	p_min = p0 + 2*sgm;  // Initial guess for p_min
+	h_Pixel_counter = 0;
+	cudaMemcpy(d_Pixel_counter, &h_Pixel_counter, sizeof(unsigned int), cudaMemcpyHostToDevice);
+	for (int iv=0; iv<NVECTORS; iv++)
+	{
+		float R = (RMAX-RMIN)*(float)rand() / (float)RAND_MAX + RMIN; // Random in RMIN..RMAX range
+		float phi = 2*3.14159265358979323846 * (float)rand() / (float)RAND_MAX; // Random in 0..2*Pi range
+		int Jx = (int)(R * cos(phi) + 0.5);  // Random Jx
+		int Jy = (int)(R * sin(phi) + 0.5);  // Random Jy
+
+		find_kernel_parameters(Jx, Jy, MQ, Nx, Ny, &Grid_size, &Ix1, &Iy1);
+		motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,Jx,Jy,MQ,p_min,d_dt,d_test_image,d_list,0,d_Pixel_counter,Nx,Ny);		
+	}
+
+	ERR( cudaMemcpy(&h_Pixel_counter, d_Pixel_counter, sizeof(unsigned int), cudaMemcpyDeviceToHost))
+	cudaDeviceSynchronize();
+	
+	if (h_Pixel_counter > 0)
+	{
+		cudaMemcpy(h_list.p, d_list.p, h_Pixel_counter*sizeof(float), cudaMemcpyDeviceToHost);
+		cudaDeviceSynchronize();
+		compute_histogram(h_test_image, Npix, sgm, &p_min_std, hist);	
+	}
+	else
+	{
+		// Decrease the initial guess for p_min above
+		printf("\n No pixels detected during histogram calculation!\n\n");
+		exit(1;)
+	}
+	
+	
 	/*
 	long *hist = (long *)malloc(sizeof(long)*(BIN_MAX-BIN_MIN+1));
 	compute_histogram(h_test_image, Npix, sgm, &p_min_std, hist);
@@ -331,6 +399,8 @@ int main(int argc, char **argv)
 //	p_min = p_min_std * sgm;
 	p_min = 0.75 * 3.722e-4;
 
+	h_Pixel_counter = 0;
+	cudaMemcpy(d_Pixel_counter, &h_Pixel_counter, sizeof(unsigned int), cudaMemcpyHostToDevice);
 
 	cudaDeviceSynchronize();
     gettimeofday (&tdr0, NULL);  
@@ -476,7 +546,6 @@ int main(int argc, char **argv)
 		}
 	}
 
-	#ifdef MALLOCHOST
 	ERR( cudaFreeHost(h_image1) )
 	ERR( cudaFreeHost(h_dt) )
 	ERR( cudaFreeHost(h_test_image) )
@@ -485,11 +554,6 @@ int main(int argc, char **argv)
 	cudaFree(h_list.Jx);
 	cudaFree(h_list.Jy);
 	cudaFree(h_list.p);
-	#else
-	free(h_image1);
-	free(h_dt);
-	free(h_test_image);
-	#endif
 
 	free(h_image);
 	free(buf0);	

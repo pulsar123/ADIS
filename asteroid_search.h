@@ -14,8 +14,6 @@
 
 //#define TEST
 
-#define MALLOCHOST  // If defined, use cudaMlalocHost in place of malloc
-
 #ifdef _OPENMP
   // OpenMP is enabled
   #include <omp.h>
@@ -36,6 +34,8 @@
 
 #define ICLOUD_FITS_MAX 10  // Number of the fits files to save for the brightest motion detections
 #define ICLOUD_STATS_MAX 1000  // Number of the top clouds to compute statistics for
+
+#define NVECTORS 1000 // Number of motion vectors used to figure out p_min
 
 //__device__ int i_free_pixel;
 __device__ unsigned int d_N_members1; 
