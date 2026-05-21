@@ -937,7 +937,28 @@ void create_mosaic (int Nx, int Ny, List list, unsigned int Pixel_counter, int *
 
 	return;
 }
+/* ------------------------------------------------ */
 
+
+__global__ void compute_histogram (List d_list, unsigned int Pixel_counter, float p_min, float del_sgm, int *d_hist)
+// Computing pixel brightness histogram for d_list pixels above p_min value.
+{
+	int i = threadIdx.x + blockIdx.x*blockDim.x;
+
+	if (i >= Pixel_counter)
+		return;
+	
+	int bin = (d_list.p[i] - p_min) / del_sgm; // bin=0 contains p=p_min...p_min+del_sgm, etc
+	
+	if (bin < 0)
+		bin = 0;
+	else if (bin > NBIN-1)
+		bin = NBIN - 1;
+	
+	atomicAdd(&d_hist[bin], 1);
+
+	return;
+}
 
 /* ------------------------------------------------ */
 /*

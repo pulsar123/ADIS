@@ -42,6 +42,7 @@ int main(int argc, char **argv)
 		printf(" image1  ...    : list of B&W input FITS images (preprocessed with reconv)\n");
 		printf("\n Optional arguments [default value]:\n\n");
 		printf(" -list file     : instead of motion object detection, use the list generated in a prior detection run\n");
+		printf(" -N_noise value : parameter used during the histogram step (in std units) [10]\n");
 		printf("\n");		
 		exit(0);
 	}
@@ -49,7 +50,7 @@ int main(int argc, char **argv)
 	int RMIN = 1;
 	int RMAX = 10;
 	float Step = 0.5;
-	float p_min_std = 25;
+	int N_noise = 10;
 	
 	int N_obligatory = 3; // Number of obligatory arguments
 	int j = 1; // j counts all arguments
@@ -97,6 +98,17 @@ int main(int argc, char **argv)
 			iob++;
 		}		
 		
+		if (strcmp(argv[j],"-N_noise") == 0)
+		{
+			j++;
+			j0 = j0 + 2;
+			if (argv[j][0] == '-' || j>=argc)
+			{
+				error = j-1;
+				break;
+			}
+			N_noise = atoi(argv[j]);
+		}		
 		j++;
 	}
 
@@ -252,7 +264,6 @@ int main(int argc, char **argv)
 	float MQ = Step * FWHM; 
 
 	printf("%f %f\n", Step, FWHM);
-//exit(0);
 
 #ifndef TEST
 	// Normalizing the time shift for the last image to 1:
@@ -282,13 +293,6 @@ int main(int argc, char **argv)
 	if (RMIN < 0)
 		RMIN = 0;
 	
-	
-	// Master image std (should come from FITS headers, or command line) 0.0028, 3.722e-4
-//	float std_master = 3.722e-4;
-	
-	// Signal detection theshold for image stacks (assuming summation stacking):
-//  p_min = p_min_std * std_master * N_images;
-
 	float *d_test_image = NULL;
 	ERR( cudaMallocPitch(&d_test_image, &pitch, (size_t)(Ny*sizeof(float)), Nx) )
 	float *h_test_image = NULL;
@@ -336,68 +340,77 @@ int main(int argc, char **argv)
 	dump_fits(Nx, Ny, 1, h_test_image, "zero_shift.fit");
 	printf("\n Zero shift stack: p=%e, sgm=%e\n\n", p0, sgm);
 	
+//++++++++++++++++++++++++++   Histogram step +++++++++++++++++++++++++++++++
 	
 	// Testing NVECTORS motion_search vectors in the RMIN..RMAX range, computing the cumulative histogram of bright pixels,
 	// which we use to place p_min threshold
-	p_min = p0 + 2*sgm;  // Initial guess for p_min
+	float delta_p = 3.0; // Initial offset when computing the histpgram, in sgm units
+	p_min = p0 + delta_p*sgm;  // Initial guess for p_min
 	h_Pixel_counter = 0;
 	cudaMemcpy(d_Pixel_counter, &h_Pixel_counter, sizeof(unsigned int), cudaMemcpyHostToDevice);
+	cudaDeviceSynchronize();
+    gettimeofday (&tdr0, NULL);  
 	for (int iv=0; iv<NVECTORS; iv++)
 	{
 		float R = (RMAX-RMIN)*(float)rand() / (float)RAND_MAX + RMIN; // Random in RMIN..RMAX range
-		float phi = 2*3.14159265358979323846 * (float)rand() / (float)RAND_MAX; // Random in 0..2*Pi range
+		float phi = 2*PI * (float)rand() / (float)RAND_MAX; // Random in 0..2*Pi range
 		int Jx = (int)(R * cos(phi) + 0.5);  // Random Jx
 		int Jy = (int)(R * sin(phi) + 0.5);  // Random Jy
 
 		find_kernel_parameters(Jx, Jy, MQ, Nx, Ny, &Grid_size, &Ix1, &Iy1);
 		motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,Jx,Jy,MQ,p_min,d_dt,d_test_image,d_list,0,d_Pixel_counter,Nx,Ny);		
 	}
+	ERR( cudaDeviceSynchronize() )
+    gettimeofday (&tdr1, NULL);  
+    tdr = tdr0;
+    timeval_subtract (&restime, &tdr1, &tdr);
+	float dt_motion_search = restime / NVECTORS; // time per one motion_search_cude run, in seconds
 
 	ERR( cudaMemcpy(&h_Pixel_counter, d_Pixel_counter, sizeof(unsigned int), cudaMemcpyDeviceToHost))
 	cudaDeviceSynchronize();
 	
-	if (h_Pixel_counter > 0)
-	{
-		cudaMemcpy(h_list.p, d_list.p, h_Pixel_counter*sizeof(float), cudaMemcpyDeviceToHost);
-		cudaDeviceSynchronize();
-		compute_histogram(h_test_image, Npix, sgm, &p_min_std, hist);	
-	}
-	else
+	if (h_Pixel_counter == 0)
 	{
 		// Decrease the initial guess for p_min above
 		printf("\n No pixels detected during histogram calculation!\n\n");
-		exit(1;)
+		exit(1);
 	}
-	
-	
-	/*
-	long *hist = (long *)malloc(sizeof(long)*(BIN_MAX-BIN_MIN+1));
-	compute_histogram(h_test_image, Npix, sgm, &p_min_std, hist);
-	printf("(0,0) vector: p_min_std=%f\n", p_min_std);
-*/
-/*
-	find_kernel_parameters(RMIN, RMIN, MQ, Nx, Ny, &Grid_size, &Ix1, &Iy1);
-	p_min = 1e30;
-	motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,RMIN,RMIN,MQ,p_min,d_dt,d_test_image,d_list,1,d_Pixel_counter,Nx,Ny);
-	ERR( cudaMemcpy2D(h_test_image, Ny*sizeof(float), d_test_image, pitch, Ny*sizeof(float), Nx, cudaMemcpyDeviceToHost) )
-	sigma_clipping(h_test_image, Npix, 3.0, &p0, &sgm, &Npix2, &kk);
-	printf("\n Rmin shift stack: p=%e, sgm=%e\n\n", p0, sgm);
-	compute_histogram(h_test_image, Npix, sgm, &p_min_std, hist);
-	printf("(Rmin,Rmin) vector: p_min_std=%f\n", p_min_std);
 
-	find_kernel_parameters(RMAX, RMAX, MQ, Nx, Ny, &Grid_size, &Ix1, &Iy1);
-	p_min = 1e30;
-	motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,RMAX,RMAX,MQ,p_min,d_dt,d_test_image,d_list,1,d_Pixel_counter,Nx,Ny);
-	ERR( cudaMemcpy2D(h_test_image, Ny*sizeof(float), d_test_image, pitch, Ny*sizeof(float), Nx, cudaMemcpyDeviceToHost) )
-	sigma_clipping(h_test_image, Npix, 3.0, &p0, &sgm, &Npix2, &kk);
-	printf("\n Rmax shift stack: p=%e, sgm=%e\n\n", p0, sgm);
-	compute_histogram(h_test_image, Npix, sgm, &p_min_std, hist);
-	printf("(Rmax,Rmax) vector: p_min_std=%f\n", p_min_std);
-*/
-//	free(hist);
+	int *h_hist = (int *)malloc(NBIN * sizeof(int));
+	int *d_hist = NULL;
+	cudaMalloc(&d_hist, NBIN * sizeof(int));		
+	cudaMemset(d_hist, 0, NBIN * sizeof(int));
+	float del_sgm = sgm * DEL_SGM;
+	int BS = 256;
+	int NBlocks = (h_Pixel_counter + BS - 1) / BS;
+	compute_histogram <<<NBlocks, BS>>> (d_list, h_Pixel_counter, p_min, del_sgm, d_hist);
+	ERR( cudaMemcpy(h_hist, d_hist, NBIN*sizeof(int), cudaMemcpyDeviceToHost))
 
-//	p_min = p_min_std * sgm;
-	p_min = 0.75 * 3.722e-4;
+	if (h_hist[NBIN-1] > N_noise)
+	{
+		printf("\nToo much noise in the last bin!\n");
+		printf("Increase N_noise, increase NBIN, or increase DEL_SGM.\n");
+		printf("This might be a sign of a bright moving object in the images.\n\n");
+		exit(1);
+	}
+
+	int pix_sum = 0;
+	int bin = 0;
+	for (bin=NBIN-1; bin>=0; bin--)
+	{
+		pix_sum = pix_sum + h_hist[bin];
+		if (pix_sum > N_noise)
+			break;
+	}
+
+	// New value of p_min based on the analysis of the histogram:
+	// It is such that there are no more than N_noise detected pixels cumulatively
+	// for NVECTORS random motion vectors.
+	p_min = p_min + del_sgm*(bin+1);
+
+	printf("\nHistogram: p_min=%f, offset=%f std\n\n", p_min, delta_p+(bin+1)*DEL_SGM);
+	
+//++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++	
 
 	h_Pixel_counter = 0;
 	cudaMemcpy(d_Pixel_counter, &h_Pixel_counter, sizeof(unsigned int), cudaMemcpyHostToDevice);
@@ -406,6 +419,14 @@ int main(int argc, char **argv)
     gettimeofday (&tdr0, NULL);  
 		
 //--------------  The longest part of the code: image stacking for different motion vectors on GPU -----	
+
+	// Estimating how long the motion search will take:
+	int NMS = PI*(RMAX*RMAX-RMIN*RMIN); // Estimated number of motion vectors
+	float dt_estimate = NMS * dt_motion_search;
+	printf("\nEstimated search time: %f seconds; N = %d\n\n", dt_estimate, NMS);
+
+	printf("\n\n === Motion search ===\n\n");
+
 	int Jcount = 0;
 	// Double loop going over all possible motion vectors:
 	// Jx, Jy are in MQ units

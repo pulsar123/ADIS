@@ -27,12 +27,6 @@
 #define MASK -100.0  // for if() statements
 #define MASK0 -101.0 // for assigning
 
-// Histogram parameters:
-#define D_SGM 0.25 // bin size (in sigma units)
-#define BIN_MIN 12 // smallest bin (inclusive; in D_SGM units)
-#define BIN_MAX 400 // largest bin (inclusive; in D_SGM units)
-#define NPIX_MAX 1 // Maximum number of pixels allowed above p_min	
-
 #define IDX(x,y,Ny) ((x)*(Ny) + (y))
 
 #ifdef __cplusplus
@@ -105,7 +99,7 @@ void subtract_background(int i_image, int N_images, float *img, int Nx, int Ny, 
 
 int date2mjd (int yr, int mn, int dy);
 
-void compute_histogram(float *image, long Npix, float sgm, float *p_min_std, long *hist);
+//void compute_histogram(float *image, long Npix, float sgm, float *p_min_std, long *hist);
 	
 void borders(float *img, int Nx, int Ny, int BW);	
 

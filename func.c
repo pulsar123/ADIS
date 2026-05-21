@@ -900,59 +900,6 @@ int date2mjd (int yr, int mn, int dy) {
   return(rv);
 }
 
-/* ------------------------------------------------ */
-
-void compute_histogram(float *image, long Npix, float sgm, float *p_min_std, long *hist)
-{
-	// Initializing hist
-	for (int j=BIN_MIN; j<=BIN_MAX; j++)
-		hist[j-BIN_MIN] = 0;
-	
-	// Computing the histogram
-	for (long i=0; i<Npix; i++)
-	{
-		if (image[i] > MASK)
-		{
-			int bin = (int)(image[i]/sgm / D_SGM);
-	//		printf("%e %e %e\n", image[i], image[i]-p0, (image[i]-p0)/sgm);
-			if (bin >= BIN_MIN && bin < BIN_MAX)
-				hist[bin-BIN_MIN]++;
-			else if (bin >= BIN_MAX)
-				hist[bin-BIN_MIN]++;
-		}
-	}
-	
-/*
-	for (int j=BIN_MIN; j<=BIN_MAX; j++)
-		printf("%d %ld\n",j,hist[j-BIN_MIN]);
-	exit(0);
-	*/
-	
-	if (hist[BIN_MAX-BIN_MIN] > NPIX_MAX)
-	{
-		printf("hist > NPIX_MAX in compute_histogram!\n");
-		printf("Increase BIN_MAX or NPIX_MAX\n");
-		exit(1);
-	}
-		
-	// Finding the critical bin value when Npixels <= Npix_max
-	long Npixels = 0;
-	int j0 = 0;
-	for (int j=BIN_MAX; j>=BIN_MIN; j--)
-	{
-		long Npix1 = Npixels + hist[j-BIN_MIN];
-		if (Npix1 > NPIX_MAX)
-			break;
-		Npixels = Npix1;
-		j0 = j;
-	}
-	
-	printf("Npixels=%ld\n",Npixels);
-	*p_min_std = (j0+BIN_MIN)*D_SGM;
-	
-	return;
-	
-}
 
 /* ------------------------------------------------ */
 
@@ -1003,3 +950,54 @@ void grow_masked_stars(float *img, int Nx, int Ny, float mask_sgm, int *N_exclud
 }
 
 /* ------------------------------------------------ */
+
+/* ------------------------------------------------ */
+
+/*
+void compute_histogram(float *image, long Npix, float sgm, float *p_min_std, long *hist)
+{
+	// Initializing hist
+	for (int j=BIN_MIN; j<=BIN_MAX; j++)
+		hist[j-BIN_MIN] = 0;
+	
+	// Computing the histogram
+	for (long i=0; i<Npix; i++)
+	{
+		if (image[i] > MASK)
+		{
+			int bin = (int)(image[i]/sgm / D_SGM);
+	//		printf("%e %e %e\n", image[i], image[i]-p0, (image[i]-p0)/sgm);
+			if (bin >= BIN_MIN && bin < BIN_MAX)
+				hist[bin-BIN_MIN]++;
+			else if (bin >= BIN_MAX)
+				hist[bin-BIN_MIN]++;
+		}
+	}
+	
+	
+	if (hist[BIN_MAX-BIN_MIN] > NPIX_MAX)
+	{
+		printf("hist > NPIX_MAX in compute_histogram!\n");
+		printf("Increase BIN_MAX or NPIX_MAX\n");
+		exit(1);
+	}
+		
+	// Finding the critical bin value when Npixels <= Npix_max
+	long Npixels = 0;
+	int j0 = 0;
+	for (int j=BIN_MAX; j>=BIN_MIN; j--)
+	{
+		long Npix1 = Npixels + hist[j-BIN_MIN];
+		if (Npix1 > NPIX_MAX)
+			break;
+		Npixels = Npix1;
+		j0 = j;
+	}
+	
+	printf("Npixels=%ld\n",Npixels);
+	*p_min_std = (j0+BIN_MIN)*D_SGM;
+	
+	return;
+	
+}
+*/
