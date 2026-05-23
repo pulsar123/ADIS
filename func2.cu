@@ -761,7 +761,7 @@ void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *C
 
 /* ------------------------------------------------ */
 	
-	void save_cloud_fits (int Nx, int Ny, int Nc, float *img, const char *name, const char *name0, Cloud *cloud, int icloud)
+	void save_cloud_fits (int Nx, int Ny, int Nc, float *img, const char *name, const char *name0, Cloud *cloud, int icloud, float sgm)
 	// Dump a 2D image into a FITS file (for debugging)
 	{
 		char buffer[100];
@@ -778,7 +778,7 @@ void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *C
 			if (img[i] > MASK)
 				img1[i] = img[i] + bias;
 			else
-				img1[i] = bias;
+				img1[i] = bias - 2*sgm;  // Making masked areas darker
 		}
 		
 		sprintf(buffer, "rm -f %s >/dev/null", name);

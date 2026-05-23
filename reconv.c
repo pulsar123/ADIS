@@ -1,4 +1,25 @@
 #include "reconv.h"
+#include "reconv.h"
+
+/*  ADIS: Asteroid Discovery in Image Sequences
+     
+	The first step in the two-step procedure. 
+	
+	Inputs: an image sequence, plus the stacked version of it (master image).
+	This should be RGB FITS files, calibrated, registered, background corrected, 
+	and cropped as needed.
+	Only the first image in the sequence needs to be plate solved.
+	
+	Outputs: the processed image sequence, B&W FITS files. All static objects
+	(stars, galaxies etc) are removed, images are Gaussian smoothed to reduce
+	the noise level, bilinear background removal applied at the end. The omages should look
+	like pure noise, with some blask masked areas ()to hide bright stars artifacts).
+
+	You need to install FFTW3 and CFITSIO libraries.
+	
+	Uses the CPU only (not GPU).
+
+*/
 
 // To compile:
 //   gcc -O2 reconv.c func.c -lfftw3 -lcfitsio -lm -lz -o reconv
@@ -12,70 +33,66 @@ int main(int argc, char **argv)
 {
     struct timeval  tdr0, tdr1, tdr;
     double restime;
-	
+
+//+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++		
 	// Processing command line arguments
 	
 	if (argc == 1)
 	{
+		printf("\n          *** ADIS: Asteroid Discovery in Image Sequences ***          \n\n");
+		printf(" Stage 1 (out of 2): pre-processing the image sequence\n");
+		
 		printf("\n Syntax (any order):\n\n");
-		printf(" %s  -i input_image  -m master_image  -o output_image  -R kernel_radius\n\n", argv[0]);
-		printf(" Optional arguments [default value]:\n\n");
-		printf(" -bias value    :  bias for the output image [0]\n");
-		printf(" -blur FWHM     :  FWHM for the Gaussian blur for the input images\n");
-		printf(" -border width  :  mask out the output image border, the width is in kernel_radius units [0]\n");
-		printf(" -bmax value    :  erase image pixels above this many master std\n");
-		printf(" -grow_mask sgm :  grow star masks using gaussian with sgm size (FWHM units)\n");
-		printf(" -k image_name  :  output kernel image\n");
-		printf(" -mask          :  use a negative number mask with -bmax\n");
-		printf(" -no_rescale    :  do not rescale brightness\n");
-		printf(" -subtract_only :  just subtract the master from the image\n");
-		printf(" -v             :  verbose\n");
+		printf(" %s  -m master_image  -o output_images_prefix  -FWHM value  -R kernel_radius  image1 image2 ... \n\n", argv[0]);
+		printf(" -m master_image  :  name of the master image (the stacked version of all input images) \n");
+		printf(" -o name          :  prefix for output images \n");
+		printf(" -FWHM value      :  FWHM in pixels (measured from the master image) \n");
+		printf(" -R kernel_radius :  kernel radius in FWHM units \n");
+		printf(" image1  ...      :  list of input FITS images (RGB only)\n");
+		printf("\n Optional arguments [default value]:\n\n");
+		printf(" -bg value        :  number of vertical tiles for bilinear background subtraction [5]\n");
+		printf(" -bias value      :  bias for the output image [0]\n");
+		printf(" -border width    :  mask out the output image border, the width is in kernel_radius units [0]\n");
+		printf(" -grow_mask sgm   :  grow star masks using gaussian with sgm size (FWHM units)\n");
+		printf(" -k image_name    :  output kernel image\n");
+		printf(" -mask value      :  mask image pixels above this many master std\n");
+		printf(" -no_rescale      :  do not rescale brightness\n");
+		printf(" -v               :  verbose\n");
 		printf("\n");		
 		exit(0);
 	}
 
+// Default values for input parameters:
 	char *file1 = "";
 	char *file0 = "";
-    char *file_out = "";
+    char prefix[100];
     double R = 1.0;
 	double outbias = 0.0;
 	char *fkernel = "";
 	int dump_kernel = 0;
 	float FWHM = 0.0;
-	int perform_blur = 0;
 	int no_rescale = 0;
 	double bmax = -1.0;
-	int subtract_only = 0;
 	int mask = 0;
 	float border_width = 0.0;
 	int mask_borders = 0;
 	int grow_mask = 0;
 	float mask_sgm = 0.0;
+	int NTx = 5;
 	
 	int N_obligatory = 4; // Number of obligatory arguments
-	int j = 1;
+	int j = 1; // j counts all arguments
+	int j0 = 1; // j0 counts only known arguments
 	int error = 0;
 	int iob = 0;
 	while (j<argc)
 	{
-		
-		// Name of the input individual image
-		if (strcmp(argv[j],"-i") == 0)
-		{
-			j++;
-			if (argv[j][0] == '-' || j>=argc)
-			{
-				error = j-1;
-				break;
-			}
-			file1 = argv[j];
-			iob++;
-		}
-		
+	// -------- Obligatory : --------------	
 		// Name of the input master image
 		if (strcmp(argv[j],"-m") == 0)
 		{
 			j++;
+			j0 = j0 + 2;
 			if (argv[j][0] == '-' || j>=argc)
 			{
 				error = j-1;
@@ -85,23 +102,25 @@ int main(int argc, char **argv)
 			iob++;
 		}
 		
-		// Name of the output image
+		// Prefix for output images
 		if (strcmp(argv[j],"-o") == 0)
 		{
 			j++;
+			j0 = j0 + 2;
 			if (argv[j][0] == '-' || j>=argc)
 			{
 				error = j-1;
 				break;
 			}
-			file_out = argv[j];
+			strcpy(prefix, argv[j]);
 			iob++;
 		}
 				
-		// Maximum kernel radius in pixels:
+		// Kernel radius in FWHM units:
 		if (strcmp(argv[j],"-R") == 0)
 		{
 			j++;
+			j0 = j0 + 2;
 			if (argv[j][0] == '-' || j>=argc)
 			{
 				error = j-1;
@@ -109,42 +128,67 @@ int main(int argc, char **argv)
 			}
 			R = atof(argv[j]);
 			iob++;
+			assert(R>0);
 		}						
 		
+		// FWHM for the master image in pixels (use Siril etc to measure it):
+		if (strcmp(argv[j],"-FWHM") == 0)
+		{
+			j++;
+			j0 = j0 + 2;
+			if (argv[j][0] == '-' || j>=argc)
+			{
+				error = j-1;
+				break;
+			}
+			FWHM = atof(argv[j]);
+			iob++;
+			assert(FWHM>0);
+		}						
+
+	// -------- Optional : --------------	
+		// Number of vertical tiles in bilinear background removal
+		// Number of horizontal tiles will be computed based on this value
+		if (strcmp(argv[j],"-bg") == 0)
+		{
+			j++;
+			j0 = j0 + 2;
+			if (argv[j][0] == '-' || j>=argc)
+			{
+				error = j-1;
+				break;
+			}
+			NTx = atoi(argv[j]);
+			assert(NTx>0);
+		}
+
 		// Output image bias (0...1 scale), 0 by default:
+		// This is only for visualization, not important for the atseroid search
 		if (strcmp(argv[j],"-bias") == 0)
 		{
 			j++;
+			j0 = j0 + 2;
 			if (argv[j][0] == '-' || j>=argc)
 			{
 				error = j-1;
 				break;
 			}
 			outbias = atof(argv[j]);
+			assert(outbias>=0.0 && outbias<=1.0);
 		}
 
-		// Only subtract the master, no convolution etc (0 by default):
-		if (strcmp(argv[j],"-subtract_only") == 0)
-		{
-			subtract_only = 1;
-		}						
-		
 		// Verbose (0 by default):
 		if (strcmp(argv[j],"-v") == 0)
 		{
+			j0++;
 			verbose = 1;
 		}						
 		
-		// Use a negative number mask with -bmax:
-		if (strcmp(argv[j],"-mask") == 0)
-		{
-			mask = 1;
-		}						
-
 		// Name of the output kernel image (optional)
 		if (strcmp(argv[j],"-k") == 0)
 		{
 			j++;
+			j0 = j0 + 2;
 			if (argv[j][0] == '-' || j>=argc)
 			{
 				error = j-1;
@@ -154,23 +198,11 @@ int main(int argc, char **argv)
 			dump_kernel = 1;
 		}		
 
-		// Gaussian blur sigma in pixels:
-		if (strcmp(argv[j],"-blur") == 0)
-		{
-			j++;
-			if (argv[j][0] == '-' || j>=argc)
-			{
-				error = j-1;
-				break;
-			}
-			FWHM = atof(argv[j]);
-			perform_blur = 1;
-		}						
-
 		// Border width in R units:
 		if (strcmp(argv[j],"-border") == 0)
 		{
 			j++;
+			j0 = j0 + 2;
 			if (argv[j][0] == '-' || j>=argc)
 			{
 				error = j-1;
@@ -178,28 +210,37 @@ int main(int argc, char **argv)
 			}
 			border_width = atof(argv[j]);
 			mask_borders = 1;
+			assert(border_width>0);
 		}						
 
 		// No brightness rescale (0 by default):
 		if (strcmp(argv[j],"-no_rescale") == 0)
 		{
+			j0++;
 			no_rescale = 1;
 		}						
 		
-		if (strcmp(argv[j],"-bmax") == 0)
+		// Number of std units above the bias (in the master image) where all brighter pixels
+		// will be masked out. To deal with bright star artifacts
+		if (strcmp(argv[j],"-mask") == 0)
 		{
 			j++;
+			j0 = j0 + 2;
 			if (argv[j][0] == '-' || j>=argc)
 			{
 				error = j-1;
 				break;
 			}
 			bmax = atof(argv[j]);
+			mask = 1;
+			assert(bmax>0);
 		}						
 
+		// This will make masked areas gow larger. To deal with bright star artifacts
 		if (strcmp(argv[j],"-grow_mask") == 0)
 		{
 			j++;
+			j0 = j0 + 2;
 			if (argv[j][0] == '-' || j>=argc)
 			{
 				error = j-1;
@@ -207,6 +248,7 @@ int main(int argc, char **argv)
 			}
 			mask_sgm = atof(argv[j]);
 			grow_mask = 1;
+			assert(mask_sgm>0);
 		}						
 
 		j++;
@@ -223,29 +265,33 @@ int main(int argc, char **argv)
 		printf("\nSome obligatory arguments are missing!\n\n");
 		exit(1);		
 	}			
+
+	int N_images = argc - j0;
+	if (N_images < 1)
+	{
+		printf("\nThere should be at least 1 image in the stack. Exiting\n\n");
+		exit(1);
+	}	
+	
+//+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++	
+
+	// Switching to pixel units:
+	R = R * FWHM;
 	
 	double Pad = R;
 
     fitsfile *f0, *f1, *fout;
     int status = 0, naxis;
     long naxes[3];
+	char buffer[150];
+	char file_out[100];
 
-// Number of OpenMP therads to use:
-	#ifdef _OPENMP
-	int NOMP = 3;
-	omp_set_num_threads(3);
-    init_all_locks();
-	if (verbose)
-		printf("\nOpenMP: using %d threads\n",NOMP);
-	#else
-	int NOMP = 1;
-	#endif	
-
-    /* ---------- Open Master ---------- */
+    /* ---------- Read Master image ---------- */
     fits_open_file(&f0, file0, READONLY, &status);
     fits_error(status);
 
     fits_get_img_dim(f0, &naxis, &status);
+    fits_error(status);
     fits_get_img_size(f0, 3, naxes, &status);
     fits_error(status);
 
@@ -254,335 +300,243 @@ int main(int argc, char **argv)
         return EXIT_FAILURE;
     }
 
-    int Nx = naxes[1];
-    int Ny = naxes[0];
+    int Nx = naxes[1]; // X axis is vertical
+    int Ny = naxes[0]; // Y axis is horizontal
     int Nc = 3;
     long plane_pixels = (long)Nx * Ny;
 
-    fits_open_file(&f1, file1, READONLY, &status);
-    fits_error(status);	
-	
-	float *buf0;
-	float *buf1;
-
-	// In OmpenMP, reading the Master and Input files in parallel
-	// (requires the Cfitsio library to be compiled with ./configure --enable-reentrant option)
-	#pragma omp parallel sections firstprivate(status)
-	{
-	#pragma omp section
-	{
-    buf0 = (float *)malloc(sizeof(float) * plane_pixels * Nc);
-    fits_read_img(f0, TFLOAT, 1,
-                  plane_pixels * Nc, NULL, buf0, NULL, &status);
+    float *img0 = malloc(sizeof(float) * plane_pixels * Nc);
+    float *img1 = malloc(sizeof(float) * plane_pixels * Nc);
+    fits_read_img(f0, TFLOAT, 1, plane_pixels * Nc, NULL, img0, NULL, &status);
     fits_error(status);
     fits_close_file(f0, &status);		
-	image_bw(buf0, plane_pixels, 3); // converting to B&W
-	}
-	
-	#pragma omp section
-	{
-    buf1 = (float *)malloc(sizeof(float) * plane_pixels * Nc);
-    fits_read_img(f1, TFLOAT, 1,
-                  plane_pixels * Nc, NULL, buf1, NULL, &status);
-    fits_error(status);				
-	image_bw(buf1, plane_pixels, 3);  // converting to B&W
-	}		
-	} // pragma section
-
-	Nc = 1; // Now working in B&W format
-
-	char buffer[50];
-	sprintf(buffer, "rm -f %s >/dev/null", file_out);
-	if (system(buffer))
-		printf("Could not delete the file %s\n", file_out);
-    fits_create_file(&fout, file_out, &status);
     fits_error(status);
-	fits_copy_header(f1, fout, &status);
-	fits_error(status);
-	
+	image_bw(img0, plane_pixels, Nc); // converting to B&W
+
     /* ---------- Padding ---------- */
     int Px = Nx + (int)(2*Pad);
     int Py = Ny + (int)(2*Pad);
     int P  = Px * Py;
-
-    gettimeofday (&tdr0, NULL);  
-
-    float *img0 = malloc(sizeof(float) * plane_pixels * NOMP);
-    float *img1 = malloc(sizeof(float) * plane_pixels * NOMP);
-
-    fftw_complex *F0 = fftw_malloc(sizeof(fftw_complex)*P * NOMP);
-    fftw_complex *F1 = fftw_malloc(sizeof(fftw_complex)*P * NOMP);
-    fftw_complex *K  = fftw_malloc(sizeof(fftw_complex)*P * NOMP);
-    fftw_complex *k_spatial = fftw_malloc(sizeof(fftw_complex)*P * NOMP);
-
-    float *img = malloc(sizeof(float) * plane_pixels * NOMP);
-    fftw_complex *F = fftw_malloc(sizeof(fftw_complex)*P * NOMP);
-    float *padded_out = malloc(sizeof(float)*P * NOMP);
-    float *cropped = malloc(sizeof(float)*plane_pixels * NOMP);
-
-    float *outbuf = malloc(sizeof(float) * plane_pixels * Nc);
+    fftw_complex *F0 = fftw_malloc(sizeof(fftw_complex)*P);
+    fftw_complex *F1 = fftw_malloc(sizeof(fftw_complex)*P);
+    fftw_complex *K  = fftw_malloc(sizeof(fftw_complex)*P);
+    fftw_complex *k_spatial = fftw_malloc(sizeof(fftw_complex)*P);
+    float *img = malloc(sizeof(float) * plane_pixels);
+    fftw_complex *F = fftw_malloc(sizeof(fftw_complex)*P);
+    float *padded_out = malloc(sizeof(float)*P);
+    float *cropped = malloc(sizeof(float)*plane_pixels);
+    float *outbuf = malloc(sizeof(float) * plane_pixels);
 	float *kernel = NULL;
 	if (dump_kernel)
 	{
-		kernel = (float*)malloc(sizeof(float) * Px*Py * Nc);
+		kernel = (float*)malloc(sizeof(float) * P);
 	}
-
-
-    gettimeofday (&tdr1, NULL);  
-    tdr = tdr0;
-    timeval_subtract (&restime, &tdr1, &tdr);
-//    printf ("time: %e\n", restime);
-
-    double eps = 1e-8;
-	double Nsigma = 3.0;
+    double eps = 1e-8; // Used during kernel estimation
+	double Nsigma = 3.0; // Used during sigma clipping
 	// Low value cutoff for the input image, in sgm1 units:
-	double Nsigma_cutoff = 5;
+	double Nsigma_cutoff = 5; // used during scaling
     int cx = Px/2;
     int cy = Py/2;
+	double sgm_master;
+	float sgm_blur = FWHM / sqrt(8*log(2.0));  // assuming perfecly gaussian PSF
+	int k_master, k1;
+	double p1, sgm1, p_master;
+	long Npix1, Npix_master;
 
-	double Sinc = 0.0;	
-	double sgm_master[3];
-	
-	float sgm_blur = FWHM / sqrt(8*log(2.0));
-//	printf("sgm_blur = %f\n", sgm_blur);
 
+	gauss_blur(Nx, Ny, img0, img0, sgm_blur);
 
-	// Full processing, separately for each channel (R, G, B)
-	#pragma omp parallel
-	#pragma omp for reduction(+:Sinc) ordered
-	for (int c=0; c<Nc; c++) 
-	
+	//3-sigma clipping and bias removal for the master image
+	sigma_clipping(img0, plane_pixels, Nsigma, &p_master, &sgm_master, &Npix_master, &k_master);
+
+	if (verbose)
 	{
-		double S = 1;
-
-		#ifdef _OPENMP
-		int ithread = omp_get_thread_num();
-		#else
-		int ithread = 0;
-		#endif		
+		printf("\nMaster sgm clipping : %d %e %e %ld\n", k_master, sgm_master, p_master, Npix_master);		
+	}
+	
+	// Direct 2D FFT transform of padded img0/img1 with zero imaginary part -> F0/F1
+	fft_images_padded(0, 1, Nx, Ny, Px, Py, img0, F0, Pad);
+	
+	// Reading all input images one by one	
+	for (int i_image=0; i_image<N_images; i_image++)
+	{		
+		file1 = argv[j0+i_image];
+		printf("Reading %s\n", file1);
 		
-		int k_master, k1;
-		int k_scale = 0;
+		fits_open_file(&f1, file1, READONLY, &status);
+		fits_error(status);	
 		
-		// Extracting the channel for the master image
-	    for (long i=0;i<plane_pixels;i++)
-			img0[ithread*plane_pixels + i] = buf0[c*plane_pixels + i];
-		// Extracting the channel for the individual image
-	    for (long i=0;i<plane_pixels;i++)
-			img1[ithread*plane_pixels + i] = buf1[c*plane_pixels + i];
+		fits_read_img(f1, TFLOAT, 1, plane_pixels * Nc, NULL, img1, NULL, &status);
+		fits_error(status);
+		
+		image_bw(img1, plane_pixels, Nc);  // converting to B&W, storing to the R channel of img1
+printf("1\n");
 
-		if (perform_blur)
-		{
-			gauss_blur(0, 2, Nx, Ny, &img0[ithread*plane_pixels], &img0[ithread*plane_pixels], sgm_blur);
-			gauss_blur(1, 2, Nx, Ny, &img1[ithread*plane_pixels], &img1[ithread*plane_pixels], sgm_blur);
-		}
+		sprintf(file_out, "%s%s", prefix, file1);
+		sprintf(buffer, "rm -f %s >/dev/null", file_out);
+		if (system(buffer))
+			printf("Could not delete the file %s\n", file_out);
+		fits_create_file(&fout, file_out, &status);
+		fits_error(status);
+		fits_copy_header(f1, fout, &status); // We copy all header info from input to output images
+		fits_error(status);
+printf("2\n");
 
-		double p1, sgm1, p_master;
-		long Npix1, Npix_master;
-
-		//3-sigma clipping and bias removal for the master image
-		sigma_clipping(&img0[ithread*plane_pixels], plane_pixels, Nsigma, &p_master, &sgm_master[c], &Npix_master, &k_master);
+			// We add +1 to avoid allocating scratch arrays internally again
+		gauss_blur(Nx, Ny, img1, img1, sgm_blur);
+printf("3\n");
 
 		//3-sigma clipping and bias removal for the individual image
-		sigma_clipping(&img1[ithread*plane_pixels], plane_pixels, Nsigma, &p1, &sgm1, &Npix1, &k1);
+		sigma_clipping(img1, plane_pixels, Nsigma, &p1, &sgm1, &Npix1, &k1);
+printf("4\n");
 			
-		if (subtract_only == 0)
-		{
-			// Direct 2D FFT transform of padded img0/img1 with zero imaginary part -> F0/F1
-			fft_images_padded(0, 2, Nx, Ny, Px, Py, &img0[ithread*plane_pixels], &F0[ithread*P], Pad);
-			fft_images_padded(1, 2, Nx, Ny, Px, Py, &img1[ithread*plane_pixels], &F1[ithread*P], Pad);
+		// Direct 2D FFT transform of padded img0/img1 with zero imaginary part -> F1
+		fft_images_padded(i_image, N_images, Nx, Ny, Px, Py, img1, F1, Pad);
+printf("5\n");
 
-			/* ---------- Kernel estimation ---------- */
-			// Complex division F1/F0 = K
-			derive_kernel_ft(P, &F1[ithread*P], &F0[ithread*P], &K[ithread*P], eps);
+		/* ---------- Kernel estimation ---------- */
+		// Complex division F1/F0 = K
+		derive_kernel_ft(P, F1, F0, K, eps);
+printf("6\n");
+	
+		// Inverse FFT: K -> k_spatial (the kernel in real space)
+		ifft_kernel(Px, Py, K, k_spatial);
+printf("7\n");
 		
-			// Inverse FFT: K -> k_spatial (the kernel in real space)
-			ifft_kernel(Px, Py, &K[ithread*P], &k_spatial[ithread*P]);
-			
-			// Truncating the kernel beyond R radius
-			truncate_kernel(Px, Py, &k_spatial[ithread*P], R);
+		// Truncating the kernel beyond R radius
+		truncate_kernel(Px, Py, k_spatial, R);
+printf("8\n");
 
-			if (dump_kernel)
-			{
-				/* circular shift */
-				for (int x=0;x<Px;x++) {
-					for (int y=0;y<Py;y++) {
-						int xs = (x + cx) % Px;
-						int ys = (y + cy) % Py;
-						long i = IDX(x,y,Py);
-						kernel[c*Px*Py + IDX(xs,ys,Py)] = outbias + sqrt(pow(k_spatial[ithread*P+i][0],2)+pow(k_spatial[ithread*P+i][1],2));
-					}
+		if (dump_kernel)
+		{
+			/* circular shift */
+			for (int x=0;x<Px;x++) {
+				for (int y=0;y<Py;y++) {
+					int xs = (x + cx) % Px;
+					int ys = (y + cy) % Py;
+					long i = x*Py+y;
+					kernel[xs*Py+ys] = outbias + sqrt(pow(k_spatial[i][0],2)+pow(k_spatial[i][1],2));
 				}
 			}
-
-			// Direct FFT: k_spatial -> K
-			fft_kernel(Px, Py, &k_spatial[ithread*P], &K[ithread*P]);
-
-			convolve_image(0, 1, Px, Py, &F0[ithread*P], &K[ithread*P], &padded_out[ithread*P]);
-
-			/* crop */
-			crop_image_centered(Nx, Ny, Px, Py, &padded_out[ithread*P], &cropped[ithread*plane_pixels]);
-
-			// The low cutoff value:
-			double p1_low = Nsigma_cutoff * sgm1;
-	
-			// Computing scaling coeficient S between the convolved master cropped and input image img1:
-			if (no_rescale)
-				S = 1.0;
-			else
-			{
-				S = scaling(&img1[ithread*plane_pixels], &cropped[ithread*plane_pixels], plane_pixels, p1_low, &k_scale);
-			}
-			
-			for (long i=0; i<plane_pixels; i++)
-			{
-				// Applying the scaling to the convolved master, and subtracting the result from the input image:
-				outbuf[c*plane_pixels + i] = img1[ithread*plane_pixels+i] - S*cropped[ithread*plane_pixels+i];	
-			}
 		}
+
+		// Direct FFT: k_spatial -> K
+		fft_kernel(Px, Py, k_spatial, K);
+printf("9\n");
+
+		// Convoling the master image with the kernel derived from image_i
+		convolve_image(i_image, N_images, Px, Py, F0, K, padded_out);
+
+		// Cropping the convolved master image
+		crop_image_centered(Nx, Ny, Px, Py, padded_out, cropped);
+
+		// The low cutoff value:
+		double p1_low = Nsigma_cutoff * sgm1;
+		double S;
+		int k_scale = 0;
+		
+		// Computing scaling coeficient S between the convolved master cropped and input image img1:
+		if (no_rescale)
+			S = 1.0;
 		else
-		// if subtract_only
 		{
-			for (long i=0; i<plane_pixels; i++)
-			{
-				if (img0[ithread*plane_pixels+i]>MASK && img1[ithread*plane_pixels+i]>MASK)
-					outbuf[c*plane_pixels + i] = img1[ithread*plane_pixels+i] - img0[ithread*plane_pixels+i];	
-				else
-					outbuf[c*plane_pixels + i] = MASK0;
-			}
+			S = scaling(img1, cropped, plane_pixels, p1_low, &k_scale);
 		}
 		
-		#pragma omp ordered
+		for (long i=0; i<plane_pixels; i++)
+		{
+			// Applying the scaling to the convolved master, and subtracting the result from the input image:
+			outbuf[i] = img1[i] - S*cropped[i];	
+		}
+		
 		if (verbose)
 		{
-			printf("\n=== Channel %d ===\n",c);
-			printf("Sigma clipping:\n");		
-			printf("Master : %d %e %e %ld\n", k_master, sgm_master[c], p_master, Npix_master);		
-			printf("Image  : %d %e %e %ld\n", k1, sgm1, p1, Npix1);		
+			printf("\nImage sgm clipping  : %d %e %e %ld\n", k1, sgm1, p1, Npix1);		
 			printf("Scaling: %d %e\n", k_scale, S);		
 		}
 
-	}  // color channels loop
-	
-	if (subtract_only == 0)
-	{
-		for (long i=0;i<plane_pixels;i++)
+		int N_excluded = 0;
+		
+		// Masking artifacts from bright stars:
+		if (mask)
+			for (long i=0;i<plane_pixels;i++)
+			{
+				float p = cropped[i]/sgm_master / bmax;
+							
+				if (p >= 1.0)
+					outbuf[i] = MASK0;  // masked pixel value = -101
+				
+				N_excluded++;
+			}
+
+		// Bilinear background subtraction, and adding the bias:
+		// Background model has these many tiles along each dimension:
+		int NTy = (int)((float)NTx / (float)Nx * (float)Ny + 0.5);
+		if(verbose)
+			printf("\nBackground model: %d x %d tiles, %d x %d pixels each\n", NTy, NTx, Ny/NTy, Nx/NTx);
+		subtract_background(i_image, N_images, outbuf, Nx, Ny, NTx, NTy, outbias);
+
+		// Grow masked stars if requested:
+		if (mask && grow_mask)
 		{
-			double w = 1.0;
-			
-			if (bmax > 0)
-			{
-				// p=1 when the pixel brightness =bmax in sgm_master units, in the blurred master image
-//				float p = sqrt(pow(cropped[i]/sgm_master[0],2)
-//					+pow(cropped[plane_pixels + i]/sgm_master[1],2)
-//					+pow(cropped[2*plane_pixels + i]/sgm_master[2],2)) / bmax;
-				float p = cropped[i]/sgm_master[0] / bmax;
-
-				// Transitional brightness range for the master image:
-				double PM_DELTA = 0.1; // Determines the half-width of the transitional brightness range
-				double pm_min = 1-PM_DELTA;
-				double pm_max = 1+PM_DELTA;
-				
-				// Optional brightness cutoff
-				if (p < pm_min)
-				{
-					w = 1.0;
-				}
-				else if (p > pm_max)
-				{
-					w = 0.0;
-				}
-				else
-				{
-					double t = (p - pm_min)/(pm_max - pm_min);
-					// w(t) = 1 at t=0, =0.5 at t=0.5, =0 at t=1, and zero derivatives on both ends
-					w = 1.0 + t*t*(-3.0 + 2.0*t);
-				}
-			}
-			
-			
-			for (int c=0; c<Nc; c++)
-			{
-				if (mask && w<0.5)
-					outbuf[c*plane_pixels + i] = MASK0;  // masked pixel value = -101
-				else
-					outbuf[c*plane_pixels + i] = w*outbuf[c*plane_pixels + i];
-			}
-			
-			Sinc = Sinc + w;
+			N_excluded = 0;
+			grow_masked_stars(outbuf, Nx, Ny, FWHM*mask_sgm, &N_excluded);
 		}
-				
-		// Cluster analysis to find all masked areas
 		
-		
-	} // if not subtract_only
+		if (verbose && mask)
+		{
+			printf("\nExcluded pixels fraction: %f\n", (float)N_excluded/plane_pixels);
+		}
 
+
+		if (mask_borders)
+			borders(outbuf, Nx, Ny, (int)(border_width*R));
+
+		/* ---------- Write output FITS ---------- */
+		
+		if (dump_kernel)
+		{
+			dump_fits(Px, Py, 1, kernel, fkernel);
+		}
+
+		// Writing a BW output image
+
+		// Storing important code parameters as additional FITS keywords:
+		fits_write_key(fout, TFLOAT, "FWHM", &FWHM, "asteroid_search", &status);
+		fits_write_key(fout, TDOUBLE, "R", &R, "asteroid_search", &status);
+		fits_write_key(fout, TDOUBLE, "BMAX", &bmax, "asteroid_search", &status);
+		fits_write_key(fout, TDOUBLE, "BIAS", &outbias, "asteroid_search", &status);
+
+		int naxis_out = 2;
+		fits_update_key(fout, TINT, "NAXIS", &naxis_out,
+						"number of array dimensions", &status);
+			fits_error(status);
+		long NY = Ny;
+		fits_update_key(fout, TLONG, "NAXIS1", &NY,
+						"length of x axis", &status);
+			fits_error(status);
+		long NX = Nx;
+		fits_update_key(fout, TLONG, "NAXIS2", &NX,
+						"length of y axis", &status);
+			fits_error(status);
+		fits_delete_key(fout, "NAXIS3", &status);
+			fits_error(status);
+		long fpixel = 1;
+		long nelem1  = (long)Nx * Ny;	
+		fits_write_img(fout, TFLOAT, fpixel, nelem1, outbuf, &status);
+		fits_error(status);
+
+		fits_close_file(fout, &status);
+		fits_close_file(f1, &status);
+	
+	}  // i_image cycle
+
+    /* ---------- Cleanup ---------- */
     fftw_free(F);
     free(padded_out);
     free(cropped);
     free(img);
-    free(buf0);
 
-	// Bilinear background subtraction, and adding the bias:
-	// Background model has these many tiles along each dimension:
-	int NTx = 5;
-	int NTy = (int)((float)NTx / (float)Nx * (float)Ny + 0.5);
-//		printf("Background model: %d x %d tiles, %d x %d pixels each\n", NTy, NTx, Ny/NTy, Nx/NTx);
-	subtract_background(0, 0, outbuf, Nx, Ny, NTx, NTy, outbias);
-
-	// Grow masked stars if requested:
-	int N_excluded = 0;
-	if (grow_mask)
-		grow_masked_stars(outbuf, Nx, Ny, FWHM*mask_sgm, &N_excluded);
-	
-	if (verbose && bmax >= 0.0)
-	{
-		printf("\nExcluded pixels fraction: %f\n", (float)N_excluded/plane_pixels);
-	}
-
-
-	if (mask_borders)
-		borders(outbuf, Nx, Ny, (int)(border_width*R));
-
-    /* ---------- Write output FITS ---------- */
-	
-	if (dump_kernel)
-	{
-		dump_fits(Px, Py, 1, kernel, fkernel);
-	}
-
-	// Writing a BW output image
-
-	fits_write_key(fout, TFLOAT, "FWHM", &FWHM, "asteroid_search", &status);
-	fits_write_key(fout, TDOUBLE, "R", &R, "asteroid_search", &status);
-	fits_write_key(fout, TDOUBLE, "BMAX", &bmax, "asteroid_search", &status);
-	fits_write_key(fout, TDOUBLE, "BIAS", &outbias, "asteroid_search", &status);
-
-	int naxis_out = 2;
-    fits_update_key(fout, TINT, "NAXIS", &naxis_out,
-                    "number of array dimensions", &status);
-		fits_error(status);
-	long NY = Ny;
-	fits_update_key(fout, TLONG, "NAXIS1", &NY,
-                    "length of x axis", &status);
-		fits_error(status);
-	long NX = Nx;
-	fits_update_key(fout, TLONG, "NAXIS2", &NX,
-                    "length of y axis", &status);
-		fits_error(status);
-	fits_delete_key(fout, "NAXIS3", &status);
-		fits_error(status);
-	long fpixel = 1;
-	long nelem1  = (long)Nx * Ny;	
-	fits_write_img(fout, TFLOAT, fpixel, nelem1, outbuf, &status);
-	fits_error(status);
-
-
-    fits_close_file(fout, &status);
-	fits_close_file(f1, &status);
-
-    /* ---------- Cleanup ---------- */
-    free(buf1);
     free(outbuf);
     free(img1);
 	free(img0);

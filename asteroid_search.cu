@@ -232,8 +232,11 @@ int main(int argc, char **argv)
 		// This is the host-device sync point
 		if (cudaMallocPitch(&h_image[i_image], &pitch, (size_t)(Ny*sizeof(float)), Nx))
 			printf("Error in cudaMallocPitch!\n");
-		printf("Nx=%d, Ny=%d, pitch=%d, image size=%f GB\n", Nx, Ny, (int)(pitch/sizeof(float)),
-		(float)(pitch*Nx)/(1024*1024*1024));
+
+		cudaMemGetInfo(&free_mem, &total_mem);
+
+		printf("Nx=%d, Ny=%d, pitch=%d, free GPU memory=%f GB\n", Nx, Ny, (int)(pitch/sizeof(float)),
+		(float)(free_mem)/(1024*1024*1024));
 		
 		if (i_image == 0)
 		{
@@ -262,8 +265,6 @@ int main(int argc, char **argv)
 		
 	// The mesh step (Motion Quantum) in pixels:
 	float MQ = Step * FWHM; 
-
-	printf("%f %f\n", Step, FWHM);
 
 #ifndef TEST
 	// Normalizing the time shift for the last image to 1:
@@ -338,13 +339,13 @@ int main(int argc, char **argv)
 	int kk;
 	sigma_clipping(h_test_image, Npix, 3.0, &p0, &sgm, &Npix2, &kk);
 	dump_fits(Nx, Ny, 1, h_test_image, "zero_shift.fit");
-	printf("\n Zero shift stack: p=%e, sgm=%e\n\n", p0, sgm);
+	printf("\nZero shift stack: p=%e, sgm=%e\n\n", p0, sgm);
 	
 //++++++++++++++++++++++++++   Histogram step +++++++++++++++++++++++++++++++
 	
 	// Testing NVECTORS motion_search vectors in the RMIN..RMAX range, computing the cumulative histogram of bright pixels,
 	// which we use to place p_min threshold
-	float delta_p = 3.0; // Initial offset when computing the histpgram, in sgm units
+	float delta_p = 3.0; // Initial offset when computing the histogram, in sgm units
 	p_min = p0 + delta_p*sgm;  // Initial guess for p_min
 	h_Pixel_counter = 0;
 	cudaMemcpy(d_Pixel_counter, &h_Pixel_counter, sizeof(unsigned int), cudaMemcpyHostToDevice);
@@ -560,7 +561,7 @@ int main(int argc, char **argv)
 				cudaDeviceSynchronize();
 				sprintf(fits_name,"cloud_%03d.fit", icloud);
 				
-				save_cloud_fits(Nx, Ny, 1, h_test_image, fits_name, name0, cloud, icloud);
+				save_cloud_fits(Nx, Ny, 1, h_test_image, fits_name, name0, cloud, icloud, sgm);
 			}
 			free(Cluster_index);
 	

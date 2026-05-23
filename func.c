@@ -1,10 +1,5 @@
 #include "reconv.h"
 
-#ifdef _OPENMP
-#define NLOCKS 10
-omp_lock_t my_lock[NLOCKS];
-#endif
-
 int timeval_subtract (double *result, struct timeval *x, struct timeval *y)
 {
   struct timeval result0;
@@ -34,15 +29,6 @@ int timeval_subtract (double *result, struct timeval *x, struct timeval *y)
 
 /* ------------------------------------------------ */
 
-#ifdef _OPENMP
-void init_all_locks()
-{
-	for (int i=0; i<NLOCKS; i++)
-		omp_init_lock(&my_lock[i]);
-}
-#endif
-
-/* ------------------------------------------------ */
 
 
 void fft_image(int Nx, int Ny,
@@ -58,24 +44,11 @@ void fft_image(int Nx, int Ny,
         in[i][1] = 0.0;
     }
 
-    #ifdef _OPENMP
-	omp_set_lock(&my_lock[0]);
-	#endif
     p = fftw_plan_dft_2d(Nx, Ny, in, F0, FFTW_FORWARD, FFTW_ESTIMATE);
-    #ifdef _OPENMP
-	omp_unset_lock(&my_lock[0]);
-	#endif
 
     fftw_execute(p);
 
-    #ifdef _OPENMP
-	omp_set_lock(&my_lock[1]);
-	#endif
-    fftw_destroy_plan(p);
-    #ifdef _OPENMP
-	omp_unset_lock(&my_lock[1]);
-	#endif
-	
+    fftw_destroy_plan(p);	
 
     fftw_free(in);
 }
@@ -114,23 +87,11 @@ void ifft_kernel(int Nx, int Ny,
 	// Inverse FFT: K -> k_spatial
 	fftw_plan p;
 
-    #ifdef _OPENMP
-	omp_set_lock(&my_lock[2]);
-	#endif
 	p = fftw_plan_dft_2d(Nx, Ny, K, k_spatial, FFTW_BACKWARD, FFTW_ESTIMATE);
-    #ifdef _OPENMP
-	omp_unset_lock(&my_lock[2]);
-	#endif
 	
     fftw_execute(p);
 	
-    #ifdef _OPENMP
-	omp_set_lock(&my_lock[3]);
-	#endif
     fftw_destroy_plan(p);
-    #ifdef _OPENMP
-	omp_unset_lock(&my_lock[3]);
-	#endif
 
     double norm = 1.0 / (Nx * Ny);
     for (int i=0;i<Nx*Ny;i++) {
@@ -214,23 +175,11 @@ void fft_kernel(int Nx, int Ny,
 {
 	fftw_plan p;
 	
-    #ifdef _OPENMP
-	omp_set_lock(&my_lock[4]);
-	#endif
     p = fftw_plan_dft_2d(Nx, Ny, k_spatial, K, FFTW_FORWARD, FFTW_ESTIMATE);
-    #ifdef _OPENMP
-	omp_unset_lock(&my_lock[4]);
-	#endif
 	
     fftw_execute(p);
 
-    #ifdef _OPENMP
-	omp_set_lock(&my_lock[5]);
-	#endif
     fftw_destroy_plan(p);
-    #ifdef _OPENMP
-	omp_unset_lock(&my_lock[5]);
-	#endif
 }
 
 /* ------------------------------------------------ */
@@ -241,7 +190,6 @@ void convolve_image(int i_image, int N_images, int Nx, int Ny,
                     float *out)
 {
 	static fftw_complex *Fout;
-	#pragma omp threadprivate(Fout)
 
 	if (i_image == 0)
 		Fout = fftw_malloc(sizeof(fftw_complex)*Nx*Ny);
@@ -259,23 +207,11 @@ void convolve_image(int i_image, int N_images, int Nx, int Ny,
 	
     /* inverse FFT */
 	fftw_plan p;
-    #ifdef _OPENMP
-	omp_set_lock(&my_lock[6]);
-	#endif
     p = fftw_plan_dft_2d(Nx, Ny, Fout, Fout, FFTW_BACKWARD, FFTW_ESTIMATE);
-    #ifdef _OPENMP
-	omp_unset_lock(&my_lock[6]);
-	#endif
 	
     fftw_execute(p);
 
-    #ifdef _OPENMP
-	omp_set_lock(&my_lock[7]);
-	#endif
     fftw_destroy_plan(p);
-    #ifdef _OPENMP
-	omp_unset_lock(&my_lock[7]);
-	#endif
 
     double norm = 1.0 / (Nx * Ny);
     for (int i=0;i<Nx*Ny;i++)
@@ -299,7 +235,6 @@ void fft_images_padded(int i_image, int N_images,int Nx, int Ny,
 	// First pad the image with Pad width, then direct FFT -> F0
 	static float *p0;
 	static fftw_complex *in;
-	#pragma omp threadprivate(p0,in)
 	
     int P = Px * Py;
 
@@ -329,23 +264,11 @@ void fft_images_padded(int i_image, int N_images,int Nx, int Ny,
         in[i][1] = 0.0;
     }
 	// Direct 2D FFT transform in (padded img0 with zero imaginary part) -> F0.
-    #ifdef _OPENMP
-	omp_set_lock(&my_lock[8]);
-	#endif
     plan = fftw_plan_dft_2d(Px, Py, in, F0, FFTW_FORWARD, FFTW_ESTIMATE);
-    #ifdef _OPENMP
-	omp_unset_lock(&my_lock[8]);
-	#endif
 
     fftw_execute(plan);
 
-    #ifdef _OPENMP
-	omp_set_lock(&my_lock[9]);
-	#endif
     fftw_destroy_plan(plan);
-    #ifdef _OPENMP
-	omp_unset_lock(&my_lock[9]);
-	#endif
 
 	if (i_image == N_images-1)
 	{
@@ -518,74 +441,65 @@ void sigma_clipping(float *image, long plane_pixels, double Nsigma, double *p0, 
 
 /* ------------------------------------------------ */
 
-	void gauss_blur(int i_image, int N_images, int Nx, int Ny, float* img, float *img_out, float sgm)
+	void gauss_blur(int Nx, int Ny, float* img, float *img_out, float sgm)
 	// Applying gaussian blur to img, with sgm radius
 	// i_image: image index
 	// N_images: number of images in the sequence
 	{
-		static float *G;
-		static float *R;
-		static fftw_complex *FG;
-		static fftw_complex *FI;
-		#pragma omp threadprivate(G,R,FG,FI)
+		float *G;
+		float *R;
+		fftw_complex *FI;
+		fftw_complex *FG;
 		
 		int Pad = (int)(10*sgm);
 		int Px = Nx + 2*Pad;
 		int Py = Ny + 2*Pad;
 		long P = Px * Py;		
 
-		if (i_image == 0)
+		// Fill an image with a Gaussian, using circular shifts and padding:
+		G = (float *)malloc(sizeof(float) * P);
+		double sum = 0.0;
+		double sgm2 = sgm*sgm;
+		double cutoff2 = (double)(Pad*Pad);
+		for (int x=0; x<Px; x++)
 		{
-			// Fill an image with a Gaussian, using circular shifts and padding:
-			G = (float *)malloc(sizeof(float) * P);
-			double sum = 0.0;
-			double sgm2 = sgm*sgm;
-			double cutoff2 = (double)(Pad*Pad);
-			for (int x=0; x<Px; x++)
+			int dx = (x < Px / 2) ? x : x - Px;
+			for (int y=0; y<Py; y++)
 			{
-				int dx = (x < Px / 2) ? x : x - Px;
-				for (int y=0; y<Py; y++)
+				int dy = (y < Py / 2) ? y : y - Py;
+				double r2 = (double)(dx*dx + dy*dy);
+				if (r2 < cutoff2)
 				{
-					int dy = (y < Py / 2) ? y : y - Py;
-					double r2 = (double)(dx*dx + dy*dy);
-					if (r2 < cutoff2)
-					{
-						double val = exp(-r2 / (2.0 * sgm2));
-						G[x*Py + y] = val;
-						sum += val;
-					}
-					else
-						G[x*Py + y] = 0.0;
+					double val = exp(-r2 / (2.0 * sgm2));
+					G[x*Py + y] = val;
+					sum += val;
 				}
+				else
+					G[x*Py + y] = 0.0;
 			}
-			
-			for (long i = 0; i < P; i++)
-				G[i] /= sum;
-
-
-			FG = fftw_malloc(sizeof(fftw_complex)*P);
-			FI = fftw_malloc(sizeof(fftw_complex)*P);
-			fft_image(Px, Py, G, FG);					
-			R = (float *)malloc(sizeof(float) * P);
 		}
+		
+		for (long i = 0; i < P; i++)
+			G[i] /= sum;
 
+
+		FG = fftw_malloc(sizeof(fftw_complex)*P);
+		FI = fftw_malloc(sizeof(fftw_complex)*P);
+		fft_image(Px, Py, G, FG);					
+		free(G);
+		R = (float *)malloc(sizeof(float) * P);
+				
+		fft_images_padded(0, 1, Nx, Ny, Px, Py, img, FI, Pad);
 		
-		
-		fft_images_padded(i_image, N_images, Nx, Ny, Px, Py, img, FI, Pad);
-		
-		convolve_image(i_image, N_images, Px, Py, FG, FI, R);
+		convolve_image(0, 1, Px, Py, FG, FI, R);
 		
 		// Cropping the convolved result, storing in img_out:
 		crop_image_centered(Nx, Ny, Px, Py, R, img_out);
 		
 
-		if (i_image == N_images-1)
-		{
-			free(G);
-			free(R);
-			fftw_free(FG);
-			fftw_free(FI);
-		}
+		free(R);
+		fftw_free(FG);
+		fftw_free(FI);
 		
 		return;		
 	}
@@ -929,15 +843,13 @@ void grow_masked_stars(float *img, int Nx, int Ny, float mask_sgm, int *N_exclud
 		else
 			mask[i] = 1.0;
 		
-	gauss_blur(0, 1, Nx, Ny, mask, mask, mask_sgm);
+	gauss_blur(Nx, Ny, mask, mask, mask_sgm);
 
 	float vmax = -100;
 	for (int i=0; i<Nx*Ny; i++)
 		if (mask[i] > vmax)
 			vmax = mask[i];
-		
-//	printf("vmax=%e\n", vmax);
-	
+			
 	for (int i=0; i<Nx*Ny; i++)
 	{
 		if (mask[i] > 0.1*vmax)

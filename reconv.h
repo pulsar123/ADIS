@@ -9,10 +9,7 @@
 #include <fftw3.h>
 #include <fitsio.h>
 #include <string.h>
-#ifdef _OPENMP
-  // OpenMP is enabled
-  #include <omp.h>
-#endif
+#include <assert.h>
 
 // CLoseness parameter for cluster members during cluster analysis
 // Possible range : 1...4
@@ -80,7 +77,7 @@ void sigma_clipping(float *image, long plane_pixels, double Nsigma, double *p0, 
 
 float scaling (float *image1, float *master, long plane_pixels, double p1_low, int *k);
 
-void gauss_blur(int i, int N, int Nx, int Ny, float* img, float *img_out, float sgm);
+void gauss_blur(int Nx, int Ny, float* img, float *img_out, float sgm);
 
 int timeval_subtract (double *result, struct timeval *x, struct timeval *y);
 
@@ -105,14 +102,6 @@ void borders(float *img, int Nx, int Ny, int BW);
 
 void grow_masked_stars(float *img, int Nx, int Ny, float mask_sgm, int *N_excluded);
 
-#ifdef _OPENMP
-void init_all_locks();
-#endif	
-
-//#ifndef MYMAIN_H
-//  #define MYMAIN_H
-//  extern int verbose;
-//#endif
 
 #ifdef __cplusplus
 }

@@ -14,11 +14,6 @@
 
 //#define TEST
 
-#ifdef _OPENMP
-  // OpenMP is enabled
-  #include <omp.h>
-#endif
-
 #define PI 3.14159265358979323846
 
 // Base tiles have NBxNB pixels size 31x31.
@@ -102,7 +97,7 @@ __global__ void find_maximum (int step, int N, float *vec, int *index, int *d_cl
 
 void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *Cluster_index, Cloud *cloud);
 
-void save_cloud_fits (int Nx, int Ny, int Nc, float *img, const char *name, const char *name0, Cloud *cloud, int i_cloud);
+void save_cloud_fits (int Nx, int Ny, int Nc, float *img, const char *name, const char *name0, Cloud *cloud, int i_cloud, float sgm);
 
 __global__ void erase_image (float *image, size_t pitch, int Nx, int Ny, double bias);
 
