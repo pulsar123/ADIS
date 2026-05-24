@@ -30,6 +30,13 @@
 extern "C" {
 #endif
 
+void my_alloc_init (int P);
+float* my_alloc_real ();
+fftw_complex* my_alloc_complex ();
+void my_free_real(float *p);
+void my_free_complex(fftw_complex *p);
+void my_alloc_destroy();
+
 void fits_error(int status);
 
 void fft_image(int Nx, int Ny,
@@ -57,12 +64,12 @@ void fft_kernel(int Nx, int Ny,
                 fftw_complex *k_spatial,
                 fftw_complex *K);
 
-void convolve_image(int i_image, int N_images, int Nx, int Ny,
+void convolve_image(int Nx, int Ny,
                     fftw_complex *F0,
                     fftw_complex *K,
                     float *out);
 
-void fft_images_padded(int i_image, int N_images, int Nx, int Ny,
+void fft_images_padded(int Nx, int Ny,
                        int Px, int Py,
                        float *img0,
                        fftw_complex *F0,

@@ -275,11 +275,23 @@ int main(int argc, char **argv)
 	
 //+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++	
 
+	// For Gaussian smoothing of both the master and individual images:
+	float sgm_blur = FWHM / sqrt(8*log(2.0));  // assuming perfecly gaussian PSF
+
 	// Switching to pixel units:
 	R = R * FWHM;
-	
 	double Pad = R;
-
+	
+	// For my memory management I find the largest image size (number of pixels). For that I need
+	// to find the largest pad size for each dimension:
+	int largest_pad = (int)(2*R);
+	int pad1 = 2*(int)(10*sgm_blur);
+	if (pad1 > largest_pad)
+		largest_pad = pad1;
+	pad1 = 2*(int)(10*FWHM*mask_sgm);
+	if (pad1 > largest_pad)
+		largest_pad = pad1;
+	
     fitsfile *f0, *f1, *fout;
     int status = 0, naxis;
     long naxes[3];
@@ -304,6 +316,10 @@ int main(int argc, char **argv)
     int Ny = naxes[0]; // Y axis is horizontal
     int Nc = 3;
     long plane_pixels = (long)Nx * Ny;
+
+	// Initializing my memory management:
+	// (it's only used for 2D images of either float or fftw_complex types)
+	my_alloc_init((Nx+largest_pad)*(Ny+largest_pad));
 
     float *img0 = malloc(sizeof(float) * plane_pixels * Nc);
     float *img1 = malloc(sizeof(float) * plane_pixels * Nc);
@@ -338,7 +354,6 @@ int main(int argc, char **argv)
     int cx = Px/2;
     int cy = Py/2;
 	double sgm_master;
-	float sgm_blur = FWHM / sqrt(8*log(2.0));  // assuming perfecly gaussian PSF
 	int k_master, k1;
 	double p1, sgm1, p_master;
 	long Npix1, Npix_master;
@@ -355,7 +370,7 @@ int main(int argc, char **argv)
 	}
 	
 	// Direct 2D FFT transform of padded img0/img1 with zero imaginary part -> F0/F1
-	fft_images_padded(0, 1, Nx, Ny, Px, Py, img0, F0, Pad);
+	fft_images_padded(Nx, Ny, Px, Py, img0, F0, Pad);
 	
 	// Reading all input images one by one	
 	for (int i_image=0; i_image<N_images; i_image++)
@@ -370,7 +385,6 @@ int main(int argc, char **argv)
 		fits_error(status);
 		
 		image_bw(img1, plane_pixels, Nc);  // converting to B&W, storing to the R channel of img1
-printf("1\n");
 
 		sprintf(file_out, "%s%s", prefix, file1);
 		sprintf(buffer, "rm -f %s >/dev/null", file_out);
@@ -380,32 +394,25 @@ printf("1\n");
 		fits_error(status);
 		fits_copy_header(f1, fout, &status); // We copy all header info from input to output images
 		fits_error(status);
-printf("2\n");
 
 			// We add +1 to avoid allocating scratch arrays internally again
 		gauss_blur(Nx, Ny, img1, img1, sgm_blur);
-printf("3\n");
 
 		//3-sigma clipping and bias removal for the individual image
 		sigma_clipping(img1, plane_pixels, Nsigma, &p1, &sgm1, &Npix1, &k1);
-printf("4\n");
 			
 		// Direct 2D FFT transform of padded img0/img1 with zero imaginary part -> F1
-		fft_images_padded(i_image, N_images, Nx, Ny, Px, Py, img1, F1, Pad);
-printf("5\n");
+		fft_images_padded(Nx, Ny, Px, Py, img1, F1, Pad);
 
 		/* ---------- Kernel estimation ---------- */
 		// Complex division F1/F0 = K
 		derive_kernel_ft(P, F1, F0, K, eps);
-printf("6\n");
 	
 		// Inverse FFT: K -> k_spatial (the kernel in real space)
 		ifft_kernel(Px, Py, K, k_spatial);
-printf("7\n");
 		
 		// Truncating the kernel beyond R radius
 		truncate_kernel(Px, Py, k_spatial, R);
-printf("8\n");
 
 		if (dump_kernel)
 		{
@@ -422,10 +429,9 @@ printf("8\n");
 
 		// Direct FFT: k_spatial -> K
 		fft_kernel(Px, Py, k_spatial, K);
-printf("9\n");
 
 		// Convoling the master image with the kernel derived from image_i
-		convolve_image(i_image, N_images, Px, Py, F0, K, padded_out);
+		convolve_image(Px, Py, F0, K, padded_out);
 
 		// Cropping the convolved master image
 		crop_image_centered(Nx, Ny, Px, Py, padded_out, cropped);
@@ -474,7 +480,7 @@ printf("9\n");
 		int NTy = (int)((float)NTx / (float)Nx * (float)Ny + 0.5);
 		if(verbose)
 			printf("\nBackground model: %d x %d tiles, %d x %d pixels each\n", NTy, NTx, Ny/NTy, Nx/NTx);
-		subtract_background(i_image, N_images, outbuf, Nx, Ny, NTx, NTy, outbias);
+		subtract_background(0, 1, outbuf, Nx, Ny, NTx, NTy, outbias);
 
 		// Grow masked stars if requested:
 		if (mask && grow_mask)
@@ -532,6 +538,8 @@ printf("9\n");
 	}  // i_image cycle
 
     /* ---------- Cleanup ---------- */
+	my_alloc_destroy();
+
     fftw_free(F);
     free(padded_out);
     free(cropped);

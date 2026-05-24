@@ -1,5 +1,127 @@
 #include "reconv.h"
 
+// Used for my_alloc routines:
+#define N_POINTERS 3 // the depth of stack for allocating both real an complex arrays
+struct MyStructure { 
+int i_real;
+int i_complex;
+int N_real;
+int N_complex;
+int P;
+float* FP[N_POINTERS];
+fftw_complex* CP[N_POINTERS];
+} ;
+
+struct MyStructure MA;
+
+/* ------------------------------------------------ */
+void my_alloc_init (int P)
+{
+	MA.N_real = 0;
+	MA.N_complex = 0;
+	MA.i_real = -1;
+	MA.i_complex = -1;
+	MA.P = P;
+	
+	for (int i=0; i<N_POINTERS; i++)
+	{
+		MA.FP[i] = NULL;
+		MA.CP[i] = NULL;
+	}
+
+//printf("Init\n");	
+	return;
+}
+
+/* ------------------------------------------------ */
+float* my_alloc_real ()
+{
+//printf("my_alloc_real1, %d %d %d\n", MA.i_real, MA.N_real, MA.P);	
+
+	MA.i_real++;
+	
+	if (MA.i_real<0 || MA.i_real >= N_POINTERS)
+	{
+		printf("\nProblem in my_alloc_real()!\n");
+		exit(1);
+	}
+	
+	if (MA.i_real == MA.N_real)
+	{
+		MA.FP[MA.i_real] = (float *)malloc(MA.P*sizeof(float));
+		MA.N_real++;
+	}
+	
+//printf("my_alloc_real2, %d %d %d\n", MA.i_real, MA.N_real, MA.P);	
+
+	return MA.FP[MA.i_real];	
+}
+
+/* ------------------------------------------------ */
+fftw_complex* my_alloc_complex ()
+{	
+//printf("my_alloc_complex1, %d %d\n", MA.i_complex, MA.N_complex);	
+	MA.i_complex++;
+	
+	if (MA.i_complex<0 || MA.i_complex >= N_POINTERS)
+	{
+		printf("\nProblem in my_alloc_complex()!\n");
+		exit(1);
+	}
+	
+	if (MA.i_complex == MA.N_complex)
+	{
+		MA.CP[MA.i_complex] = fftw_malloc(sizeof(fftw_complex)*MA.P);
+		MA.N_complex++;
+	}
+	
+//printf("my_alloc_complex2, %d %d\n", MA.i_complex, MA.N_complex);	
+	return MA.CP[MA.i_complex];	
+}
+
+/* ------------------------------------------------ */
+void my_free_real(float *p)
+{
+//printf("my_free_real1, %d %d\n", MA.i_real, MA.N_real);	
+	MA.i_real--;
+	
+	if (MA.i_real<-1 || MA.i_real >= N_POINTERS)
+	{
+		printf("\nProblem in my_free_real()!\n");
+		exit(1);
+	}
+
+//printf("my_free_real2, %d %d\n", MA.i_real, MA.N_real);	
+}
+
+/* ------------------------------------------------ */
+void my_free_complex(fftw_complex *p)
+{
+//printf("my_free_complex1, %d %d\n", MA.i_complex, MA.N_complex);	
+	MA.i_complex--;
+	
+	if (MA.i_complex<-1 || MA.i_complex >= N_POINTERS)
+	{
+		printf("\nProblem in my_free_complex()!\n");
+		exit(1);
+	}
+
+//printf("my_free_complex2, %d %d\n", MA.i_complex, MA.N_complex);		
+}
+
+/* ------------------------------------------------ */
+
+void my_alloc_destroy()
+{
+	for (int i=0; i<MA.N_real; i++)
+		free(MA.FP[i]);
+	
+	for (int i=0; i<MA.N_complex; i++)
+		fftw_free(MA.CP[i]);	
+}
+
+/* ------------------------------------------------ */
+
 int timeval_subtract (double *result, struct timeval *x, struct timeval *y)
 {
   struct timeval result0;
@@ -35,7 +157,9 @@ void fft_image(int Nx, int Ny,
                 float *img0,
                 fftw_complex *F0)
 {
-    fftw_complex *in = fftw_malloc(sizeof(fftw_complex)*Nx*Ny);
+//    fftw_complex *in = fftw_malloc(sizeof(fftw_complex)*Nx*Ny);
+	fftw_complex *in = my_alloc_complex();
+	
     fftw_plan p;
 
     /* Image0 */
@@ -50,7 +174,7 @@ void fft_image(int Nx, int Ny,
 
     fftw_destroy_plan(p);	
 
-    fftw_free(in);
+    my_free_complex(in);
 }
 
 /* ------------------------------------------------ */
@@ -112,7 +236,8 @@ void truncate_kernel(int Nx, int Ny,
     int cy = Ny/2;
     double R0 = 0.5 * R;
 
-    fftw_complex *tmp = fftw_malloc(sizeof(fftw_complex)*Nx*Ny);
+    fftw_complex *tmp = my_alloc_complex();
+	//fftw_malloc(sizeof(fftw_complex)*Nx*Ny);
 
     /* circular shift */
     for (int x=0;x<Nx;x++) {
@@ -162,7 +287,7 @@ void truncate_kernel(int Nx, int Ny,
         }
     }
 
-    fftw_free(tmp);
+    my_free_complex(tmp);
 	return;
 }
 
@@ -184,15 +309,14 @@ void fft_kernel(int Nx, int Ny,
 
 /* ------------------------------------------------ */
 
-void convolve_image(int i_image, int N_images, int Nx, int Ny,
+void convolve_image(int Nx, int Ny,
                     fftw_complex *F0,
                     fftw_complex *K,
                     float *out)
 {
 	static fftw_complex *Fout;
 
-	if (i_image == 0)
-		Fout = fftw_malloc(sizeof(fftw_complex)*Nx*Ny);
+	Fout = my_alloc_complex();
 
     /* multiply in Fourier space */
     for (int i=0;i<Nx*Ny;i++) {
@@ -219,14 +343,13 @@ void convolve_image(int i_image, int N_images, int Nx, int Ny,
         out[i] = Fout[i][0] * norm;
 	}
 
-	if (i_image == N_images-1)
-		fftw_free(Fout);
+	my_free_complex(Fout);
 }
 
 /* ------------------------------------------------ */
 
 
-void fft_images_padded(int i_image, int N_images,int Nx, int Ny,
+void fft_images_padded(int Nx, int Ny,
                        int Px, int Py,
                        float *img0,
                        fftw_complex *F0,
@@ -238,11 +361,8 @@ void fft_images_padded(int i_image, int N_images,int Nx, int Ny,
 	
     int P = Px * Py;
 
-	if (i_image == 0)
-	{
-		p0 = calloc(P, sizeof(float));
-		in = fftw_malloc(sizeof(fftw_complex)*P);
-	}
+	p0 = my_alloc_real();
+	in = my_alloc_complex();
 
     /* zero-fill */
     for (int i = 0; i < Px*Py; i++)
@@ -270,11 +390,8 @@ void fft_images_padded(int i_image, int N_images,int Nx, int Ny,
 
     fftw_destroy_plan(plan);
 
-	if (i_image == N_images-1)
-	{
-		fftw_free(in);
-		free(p0);
-	}
+	my_free_complex(in);
+	my_free_real(p0);
 }
 
 
@@ -435,6 +552,10 @@ void sigma_clipping(float *image, long plane_pixels, double Nsigma, double *p0, 
         sgm = sqrt(sum2 / sumW - S*S);	
 	} 
 	while(Npix != Npix_old);
+	
+	free(X);
+	free(Y);
+	free(W);
 	  
 	return pow(10.0,S);
   }
@@ -442,22 +563,22 @@ void sigma_clipping(float *image, long plane_pixels, double Nsigma, double *p0, 
 /* ------------------------------------------------ */
 
 	void gauss_blur(int Nx, int Ny, float* img, float *img_out, float sgm)
+	// Works with two different cases cas (0, 1), operates two different sets of arrays
+	// Thre stages: -1 (initial), 0 (continuing), 1 (finalize)
 	// Applying gaussian blur to img, with sgm radius
-	// i_image: image index
-	// N_images: number of images in the sequence
-	{
-		float *G;
-		float *R;
-		fftw_complex *FI;
-		fftw_complex *FG;
-		
+	{		
+		float* R;
+		fftw_complex* FI;
+		fftw_complex* FG;
+	
 		int Pad = (int)(10*sgm);
 		int Px = Nx + 2*Pad;
 		int Py = Ny + 2*Pad;
 		long P = Px * Py;		
 
 		// Fill an image with a Gaussian, using circular shifts and padding:
-		G = (float *)malloc(sizeof(float) * P);
+		float *G = my_alloc_real();
+		//(float *)malloc(sizeof(float) * P);
 		double sum = 0.0;
 		double sgm2 = sgm*sgm;
 		double cutoff2 = (double)(Pad*Pad);
@@ -482,24 +603,27 @@ void sigma_clipping(float *image, long plane_pixels, double Nsigma, double *p0, 
 		for (long i = 0; i < P; i++)
 			G[i] /= sum;
 
-
-		FG = fftw_malloc(sizeof(fftw_complex)*P);
-		FI = fftw_malloc(sizeof(fftw_complex)*P);
-		fft_image(Px, Py, G, FG);					
-		free(G);
-		R = (float *)malloc(sizeof(float) * P);
-				
-		fft_images_padded(0, 1, Nx, Ny, Px, Py, img, FI, Pad);
+		FG = my_alloc_complex();
+		//fftw_malloc(sizeof(fftw_complex)*P);
+		FI = my_alloc_complex();
+		//fftw_malloc(sizeof(fftw_complex)*P);
 		
-		convolve_image(0, 1, Px, Py, FG, FI, R);
+		fft_image(Px, Py, G, FG);
+		
+		my_free_real(G);
+		R = my_alloc_real();
+		//(float *)malloc(sizeof(float) * P);
+				
+		fft_images_padded(Nx, Ny, Px, Py, img, FI, Pad);
+		
+		convolve_image(Px, Py, FG, FI, R);
 		
 		// Cropping the convolved result, storing in img_out:
 		crop_image_centered(Nx, Ny, Px, Py, R, img_out);
 		
-
-		free(R);
-		fftw_free(FG);
-		fftw_free(FI);
+		my_free_real(R);
+		my_free_complex(FG);
+		my_free_complex(FI);
 		
 		return;		
 	}
@@ -518,7 +642,8 @@ void sigma_clipping(float *image, long plane_pixels, double Nsigma, double *p0, 
 		
 		long Npixels = Nx*Ny;
 		
-		float *img1 = (float *)malloc(Npixels*sizeof(float));
+		float *img1 = my_alloc_real();
+		//(float *)malloc(Npixels*sizeof(float));
 		
 		
 		for (long i = 0; i < Npixels; i++)
@@ -553,7 +678,7 @@ void sigma_clipping(float *image, long plane_pixels, double Nsigma, double *p0, 
 		fits_error(status);
 		fits_close_file(fk, &status);		
 		
-		free(img1);
+		my_free_real(img1);
 		
 		return;
 	}
@@ -835,7 +960,8 @@ void borders(float *img, int Nx, int Ny, int BW)
 
 void grow_masked_stars(float *img, int Nx, int Ny, float mask_sgm, int *N_excluded)
 {
-	float *mask = (float *)malloc(Nx*Ny*sizeof(float));
+	float *mask = my_alloc_real();
+	//(float *)malloc(Nx*Ny*sizeof(float));
 		
 	for (int i=0; i<Nx*Ny; i++)
 		if (img[i] > MASK)
@@ -858,7 +984,7 @@ void grow_masked_stars(float *img, int Nx, int Ny, float mask_sgm, int *N_exclud
 			(*N_excluded)++;
 	}
 	
-	free(mask);
+	my_free_real(mask);
 }
 
 /* ------------------------------------------------ */
