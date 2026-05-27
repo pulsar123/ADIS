@@ -669,7 +669,8 @@ __global__ void find_neighbours(int N_members, int N_cloud, unsigned int Pixel_c
 
 /* ------------------------------------------------ */
 
-void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *Cluster_index, Cloud *cloud)
+void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *Cluster_index, Cloud *cloud,
+ float sgm, float MQ)
 // Computing basic stats for the brightest clouds
 {
 	int NC;
@@ -731,28 +732,28 @@ void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *C
 			continue;
 		}
 		
+		// Jx, Jy are converted to pixels
 		cloud[icloud].pmax = pmax;
 		cloud[icloud].imax = imax;
 		cloud[icloud].ix = h_list.ix[imax];
 		cloud[icloud].iy = h_list.iy[imax];
-		cloud[icloud].Jx = h_list.Jx[imax];
-		cloud[icloud].Jy = h_list.Jy[imax];
+		cloud[icloud].Jx = MQ * h_list.Jx[imax];
+		cloud[icloud].Jy = MQ * h_list.Jy[imax];
 		cloud[icloud].ix_min = ix_min;
 		cloud[icloud].iy_min = iy_min;
-		cloud[icloud].Jx_min = Jx_min;
-		cloud[icloud].Jy_min = Jy_min;
+		cloud[icloud].Jx_min = MQ * Jx_min;
+		cloud[icloud].Jy_min = MQ * Jy_min;
 		cloud[icloud].ix_max = ix_max;
 		cloud[icloud].iy_max = iy_max;
-		cloud[icloud].Jx_max = Jx_max;
-		cloud[icloud].Jy_max = Jy_max;
+		cloud[icloud].Jx_max = MQ * Jx_max;
+		cloud[icloud].Jy_max = MQ * Jy_max;
 		cloud[icloud].N = N;
 		cloud[icloud].mass = mass;				
 		
-		//!!! imax is wrong on GPU!
-		
-		float rad_xy = sqrt(pow((ix_max-ix_min)/2.0,2) + pow((ix_max-ix_min)/2.0,2));
-		float rad_J = sqrt(pow((Jx_max-Jx_min)/2.0,2) + pow((Jx_max-Jx_min)/2.0,2));
-		fprintf(fp, "%4d %11e %4d %4d %4d %4d %4d %11e %8.2f %8.2f\n", icloud, pmax, h_list.ix[imax], h_list.iy[imax], h_list.Jx[imax], h_list.Jy[imax], N, mass, rad_xy, rad_J);
+		float rad_xy = MQ*sqrt(pow((ix_max-ix_min)/2.0,2) + pow((ix_max-ix_min)/2.0,2));
+		float rad_J = MQ*sqrt(pow((Jx_max-Jx_min)/2.0,2) + pow((Jx_max-Jx_min)/2.0,2));
+		fprintf(fp, "%4d %11e %4d %4d %8.2f %8.2f %7d %11e %8.2f %8.2f\n", icloud, pmax/sgm, h_list.ix[imax],
+		h_list.iy[imax], MQ*h_list.Jx[imax], MQ*h_list.Jy[imax], N, mass, rad_xy, rad_J);
 	}
 	
 	fclose(fp);
@@ -778,7 +779,7 @@ void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *C
 			if (img[i] > MASK)
 				img1[i] = img[i] + bias;
 			else
-				img1[i] = bias - 2*sgm;  // Making masked areas darker
+				img1[i] = bias - 4*sgm;  // Making masked areas darker
 		}
 		
 		sprintf(buffer, "rm -f %s >/dev/null", name);

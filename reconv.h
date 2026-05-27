@@ -109,6 +109,7 @@ void borders(float *img, int Nx, int Ny, int BW);
 
 void grow_masked_stars(float *img, int Nx, int Ny, float mask_sgm, int *N_excluded);
 
+void erase_hot_pixels(float *img, int Nx, int Ny, float p_max);
 
 #ifdef __cplusplus
 }

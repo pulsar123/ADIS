@@ -34,44 +34,40 @@ int main(int argc, char **argv)
 	if (argc == 1)
 	{
 		printf("\n Syntax (any order):\n\n");
-		printf(" %s  -RMIN value  -RMAX value  -Step value  image1 image2 ... \n\n", argv[0]);
+		printf(" %s  -RMAX value  -Step value  image1 image2 ... \n\n", argv[0]);
 		printf("\n Obligatory arguments:\n\n");
-		printf(" -RMIN value    : shortest motion vector (in Step*FWHM units)\n");
-		printf(" -RMAX value    : longest motion vector (in Step*FWHM units)\n");
-		printf(" -Step value    : the mesh step for motion vector lengths (in FWHM units)\n");
-		printf(" image1  ...    : list of B&W input FITS images (preprocessed with reconv)\n");
+		printf(" -RMAX value        : longest motion vector (in FWHM units)\n");
+		printf(" -Step value        : the mesh step for motion vector lengths (in FWHM units)\n");
+		printf(" image1  ...        : list of B&W input FITS images (preprocessed with reconv)\n");
 		printf("\n Optional arguments [default value]:\n\n");
-		printf(" -list file     : instead of motion object detection, use the list generated in a prior detection run\n");
-		printf(" -N_noise value : parameter used during the histogram step (in std units) [10]\n");
+		printf(" -finetune x y Jx Jy: do finetuning search for one cluster described by the 4D coords (pixels)\n");
+		printf(" -list file         : instead of motion object detection, use the list generated in a prior detection run\n");
+		printf(" -N_cloud value     : maximum number of cloud fits files to save [10]\n");
+		printf(" -N_noise value     : parameter used during the histogram step (in std units) [10]\n");
+		printf(" -RMIN value        : shortest motion vector (in FWHM units) [1]\n");
+		printf("\n In the finetune mode, the meaning of RMIN and RMAX changes:\n");
+		printf(" RMIN: ignored\n");
+		printf(" RMAX: largest distance from the cloud in (Jx,Jy) coordinates, using FWHM units\n");
 		printf("\n");		
 		exit(0);
 	}
 
-	int RMIN = 1;
-	int RMAX = 10;
+	float RMINf = 1;
+	float RMAXf = 10;
 	float Step = 0.5;
 	int N_noise = 10;
+	int N_cloud_max = 10;
+	int Center_pix[4];
+	int finetune = 0;
 	
-	int N_obligatory = 3; // Number of obligatory arguments
+	int N_obligatory = 2; // Number of obligatory arguments
 	int j = 1; // j counts all arguments
 	int j0 = 1; // j0 counts only known arguments
 	int error = 0;
 	int iob = 0;
 	while (j<argc)
 	{		
-		if (strcmp(argv[j],"-RMIN") == 0)
-		{
-			j++;
-			j0 = j0 + 2;
-			if (argv[j][0] == '-' || j>=argc)
-			{
-				error = j-1;
-				break;
-			}
-			RMIN = atoi(argv[j]);
-			iob++;
-		}
-		
+		// Obligatory switches:
 		if (strcmp(argv[j],"-RMAX") == 0)
 		{
 			j++;
@@ -81,7 +77,7 @@ int main(int argc, char **argv)
 				error = j-1;
 				break;
 			}
-			RMAX = atoi(argv[j]);
+			RMAXf = atof(argv[j]);
 			iob++;
 		}
 		
@@ -98,6 +94,36 @@ int main(int argc, char **argv)
 			iob++;
 		}		
 		
+		// Optional switches:
+		
+		if (strcmp(argv[j],"-finetune") == 0)
+		{
+			j0 = j0 + 5;
+			finetune = 1;
+			for (int i=0; i<4; i++)
+			{
+				j++;
+				if (j>=argc)
+				{
+					error = j-1;
+					break;
+				}
+				Center_pix[i] = atoi(argv[j]);
+			}
+		}		
+
+		if (strcmp(argv[j],"-N_cloud") == 0)
+		{
+			j++;
+			j0 = j0 + 2;
+			if (argv[j][0] == '-' || j>=argc)
+			{
+				error = j-1;
+				break;
+			}
+			N_cloud_max = atoi(argv[j]);
+		}		
+
 		if (strcmp(argv[j],"-N_noise") == 0)
 		{
 			j++;
@@ -109,6 +135,19 @@ int main(int argc, char **argv)
 			}
 			N_noise = atoi(argv[j]);
 		}		
+
+		if (strcmp(argv[j],"-RMIN") == 0)
+		{
+			j++;
+			j0 = j0 + 2;
+			if (argv[j][0] == '-' || j>=argc)
+			{
+				error = j-1;
+				break;
+			}
+			RMINf = atof(argv[j]);
+		}
+		
 		j++;
 	}
 
@@ -130,6 +169,9 @@ int main(int argc, char **argv)
 	
 	// Now j0 points to the first image name argument
 
+	// Switching from FWHM to MQ=FWHM*Step units
+	int RMIN = (int)(RMINf/Step + 0.5);
+	int RMAX = (int)(RMAXf/Step + 0.5);
 	
 	Is_GPU_present();
 	size_t free_mem, total_mem;
@@ -137,7 +179,19 @@ int main(int argc, char **argv)
 	printf("GPU memory: Free: %f GB, Total: %f GB\n\n", (float)free_mem/(1024*1024*1024), (float)total_mem/(1024*1024*1024));		
 	
 	int N_images = argc - j0;
-//	printf ("%d %d %d %d %d\n", argc, j0, N_images, RMIN, RMAX);
+
+	List h_list;
+	cudaMallocHost(&h_list.ix, MAX_PIXELS*sizeof(int));
+	cudaMallocHost(&h_list.iy, MAX_PIXELS*sizeof(int));
+	cudaMallocHost(&h_list.Jx, MAX_PIXELS*sizeof(int));
+	cudaMallocHost(&h_list.Jy, MAX_PIXELS*sizeof(int));
+	cudaMallocHost(&h_list.p, MAX_PIXELS*sizeof(float));
+	List d_list;
+	cudaMalloc(&d_list.ix, MAX_PIXELS*sizeof(int));
+	cudaMalloc(&d_list.iy, MAX_PIXELS*sizeof(int));
+	cudaMalloc(&d_list.Jx, MAX_PIXELS*sizeof(int));
+	cudaMalloc(&d_list.Jy, MAX_PIXELS*sizeof(int));
+	cudaMalloc(&d_list.p, MAX_PIXELS*sizeof(float));	
 	
 	float **h_image = NULL;
 	h_image = (float **)malloc(N_images*sizeof(float*));
@@ -266,6 +320,13 @@ int main(int argc, char **argv)
 	// The mesh step (Motion Quantum) in pixels:
 	float MQ = Step * FWHM; 
 
+	float R0;
+	if (finetune)
+	{
+		// Central radius in finetune mode (in MQ units):
+		R0 = sqrt(pow(Center_pix[2],2) + pow(Center_pix[3],2)) / MQ;
+	}
+	
 #ifndef TEST
 	// Normalizing the time shift for the last image to 1:
 	for (int i=0; i<N_images; i++)
@@ -284,15 +345,17 @@ int main(int argc, char **argv)
 	// Base tile (Ixb,Iyb) covers this range of pixels (inclusive): ix=NB*Ixb..NB*(Ixb+1)-1, iy=NB*Iyb..NB*(Iyb+1)-1 
 	
 	
-	
-	// RMAX is limited by the image diagonal length (distance between the farthest tiles):
-	int diag = floor(NB * sqrt(pow(Nxb-1,2) + pow(Nyb-1,2)) / MQ);
-	if (RMAX > diag)
-		RMAX = diag;
-	if (RMAX < 0)
-		RMAX = 0;
-	if (RMIN < 0)
-		RMIN = 0;
+	if (finetune == 0)
+	{
+		// RMAX is limited by the image diagonal length (distance between the farthest tiles):
+		int diag = floor(NB * sqrt(pow(Nxb-1,2) + pow(Nyb-1,2)) / MQ);
+		if (RMAX > diag)
+			RMAX = diag;
+		if (RMAX < 0)
+			RMAX = 0;
+		if (RMIN < 0)
+			RMIN = 0;
+	}
 	
 	float *d_test_image = NULL;
 	ERR( cudaMallocPitch(&d_test_image, &pitch, (size_t)(Ny*sizeof(float)), Nx) )
@@ -304,19 +367,6 @@ int main(int argc, char **argv)
 	ERR (cudaMalloc(&d_Pixel_counter, sizeof(unsigned int)))
 	unsigned int h_Pixel_counter = 0;
 	cudaMemcpy(d_Pixel_counter, &h_Pixel_counter, sizeof(unsigned int), cudaMemcpyHostToDevice);
-	
-	List h_list;
-	cudaMallocHost(&h_list.ix, MAX_PIXELS*sizeof(int));
-	cudaMallocHost(&h_list.iy, MAX_PIXELS*sizeof(int));
-	cudaMallocHost(&h_list.Jx, MAX_PIXELS*sizeof(int));
-	cudaMallocHost(&h_list.Jy, MAX_PIXELS*sizeof(int));
-	cudaMallocHost(&h_list.p, MAX_PIXELS*sizeof(float));
-	List d_list;
-	cudaMalloc(&d_list.ix, MAX_PIXELS*sizeof(int));
-	cudaMalloc(&d_list.iy, MAX_PIXELS*sizeof(int));
-	cudaMalloc(&d_list.Jx, MAX_PIXELS*sizeof(int));
-	cudaMalloc(&d_list.Jy, MAX_PIXELS*sizeof(int));
-	cudaMalloc(&d_list.p, MAX_PIXELS*sizeof(float));
 	
 	cudaMemGetInfo(&free_mem, &total_mem);
 	printf("GPU memory: Free: %f GB, Total: %f GB\n\n", (float)free_mem/(1024*1024*1024), (float)total_mem/(1024*1024*1024));
@@ -342,6 +392,8 @@ int main(int argc, char **argv)
 	printf("\nZero shift stack: p=%e, sgm=%e\n\n", p0, sgm);
 	
 //++++++++++++++++++++++++++   Histogram step +++++++++++++++++++++++++++++++
+
+	printf("\nProcessing %d motion vectors to compute the histogram\n", NVECTORS);
 	
 	// Testing NVECTORS motion_search vectors in the RMIN..RMAX range, computing the cumulative histogram of bright pixels,
 	// which we use to place p_min threshold
@@ -351,16 +403,57 @@ int main(int argc, char **argv)
 	cudaMemcpy(d_Pixel_counter, &h_Pixel_counter, sizeof(unsigned int), cudaMemcpyHostToDevice);
 	cudaDeviceSynchronize();
     gettimeofday (&tdr0, NULL);  
-	for (int iv=0; iv<NVECTORS; iv++)
+	float R, phi;
+	int Jx, Jy;
+	int iv = 0;
+	int iv0 = 0;
+	float R1, R2;
+	if (finetune)
 	{
-		float R = (RMAX-RMIN)*(float)rand() / (float)RAND_MAX + RMIN; // Random in RMIN..RMAX range
-		float phi = 2*PI * (float)rand() / (float)RAND_MAX; // Random in 0..2*Pi range
-		int Jx = (int)(R * cos(phi) + 0.5);  // Random Jx
-		int Jy = (int)(R * sin(phi) + 0.5);  // Random Jy
-
-		find_kernel_parameters(Jx, Jy, MQ, Nx, Ny, &Grid_size, &Ix1, &Iy1);
-		motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,Jx,Jy,MQ,p_min,d_dt,d_test_image,d_list,0,d_Pixel_counter,Nx,Ny);		
+		// In finetune mode, we compute the histogram from the range of the motion vectors
+		// centered around the cloud center motion vector R0:
+		R1 = R0 - RMAX;
+		R2 = R0 + RMAX;
 	}
+	else
+	{
+		R1 = RMIN;
+		R2 = RMAX;
+	}
+	
+	do
+	{
+		iv0++;
+		
+		R = (R2-R1)*(float)rand() / (float)RAND_MAX + R1; // Random in R1..R2 range
+		phi = 2*PI * (float)rand() / (float)RAND_MAX; // Random in 0..2*Pi range
+		Jx = (int)(R * cos(phi) + 0.5);  // Random Jx
+		Jy = (int)(R * sin(phi) + 0.5);  // Random Jy
+		if (finetune)
+		{
+			// Distance from the cloud center (MQ units):
+			float dR = sqrt(pow(Jx-Center_pix[2]/MQ,2) + pow(Jy-Center_pix[3]/MQ,2));
+			// In finetuning mode, we exclude the neighbourhood of the cluster when computing the histogram:
+			if (dR < RMAX)
+				continue;
+		}
+		
+		find_kernel_parameters(Jx, Jy, MQ, Nx, Ny, &Grid_size, &Ix1, &Iy1);
+		motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,Jx,Jy,MQ,p_min,
+		   d_dt,d_test_image,d_list,0,d_Pixel_counter,Nx,Ny);		
+		
+		iv++;
+	}
+	while (iv < NVECTORS && iv0 < 10*NVECTORS);
+	
+	if (iv == 0)
+	{
+		printf("\nSomething wrong in histogram computation!\n");
+		if (finetune)
+			printf("Likely RMAX is too large, in finetune mode\n");
+		exit(1);
+	}
+	
 	ERR( cudaDeviceSynchronize() )
     gettimeofday (&tdr1, NULL);  
     tdr = tdr0;
@@ -428,17 +521,31 @@ int main(int argc, char **argv)
 
 	printf("\n\n === Motion search ===\n\n");
 
+	int Jx0 = 0;
+	int Jy0 = 0;
+	// In the finetune mode, we are searching in the vicinity of the cloud
+	if (finetune)
+	{
+		Jx0 = (int)(Center_pix[2]/MQ + 0.5);
+		Jy0 = (int)(Center_pix[3]/MQ + 0.5);
+	}
+
 	int Jcount = 0;
 	// Double loop going over all possible motion vectors:
 	// Jx, Jy are in MQ units
-	for (int Jx=-RMAX; Jx<=RMAX; Jx++)		
+	for (int Jx=Jx0-RMAX; Jx<=Jx0+RMAX; Jx++)		
 	{
-		printf("Jx = %d\n", Jx);
-		for (int Jy=-RMAX; Jy<=RMAX; Jy++)
+		for (int Jy=Jy0-RMAX; Jy<=Jy0+RMAX; Jy++)
 		{
-			// Length of the motion vector in MQ units:
-			float R = sqrt(float(Jx*Jx + Jy*Jy));
-			if (R >= RMIN && R <= RMAX)
+			float dR;
+			if (finetune)
+				// Distance from the cloud center (MQ units):
+				dR = sqrt(pow(Jx-Center_pix[2]/MQ,2) + pow(Jy-Center_pix[3]/MQ,2));
+				else
+				// Length of the motion vector in MQ units:
+				dR = sqrt(float(Jx*Jx + Jy*Jy));
+				
+			if (finetune==0 && (dR >= RMIN && dR <= RMAX) || finetune==1 && (dR <= RMAX))
 			{
 				find_kernel_parameters(Jx, Jy, MQ, Nx, Ny, &Grid_size, &Ix1, &Iy1);
 								
@@ -448,6 +555,8 @@ int main(int argc, char **argv)
 				motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,Jx,Jy,MQ,p_min,d_dt,d_test_image,d_list,0,d_Pixel_counter,Nx,Ny);
 				
 				Jcount++;
+				if (Jcount % 10000 == 0)
+					printf("Processed %d motion vectors\n", Jcount);
 			}			
 		}
 		}		
@@ -489,8 +598,8 @@ int main(int argc, char **argv)
 					imax = i;
 				}
 			}
-			printf("Motion vector for the brightest pixel: (%d, %d); pixel coords: (%d, %d); p=%f (%f std), i=%d\n",
-			h_list.Jx[imax], h_list.Jy[imax], h_list.ix[imax], h_list.iy[imax], h_list.p[imax],
+			printf("Motion vector for the brightest pixel: (%8.2f, %8.2f); pixel coords: (%d, %d); p=%f (%f std), i=%d\n",
+			MQ*h_list.Jx[imax], MQ*h_list.Jy[imax], h_list.ix[imax], h_list.iy[imax], h_list.p[imax],
 			h_list.p[imax]/sgm, imax);
 			
 			int *Cluster_index = (int *)malloc(h_Pixel_counter*sizeof(int));			
@@ -521,23 +630,25 @@ int main(int argc, char **argv)
 			FILE *fp = fopen("list.dat", "w");
 			for (int i=0; i<h_Pixel_counter; i++)
 			{
-				fprintf(fp, "%d %d %d %d %d %11e %d\n", i, h_list.Jx[i], h_list.Jy[i], h_list.ix[i], h_list.iy[i],
-				h_list.p[i], Cluster_index[i]);
+				// Jx, Jy are converted to pixels:
+				fprintf(fp, "%d %f %f %d %d %11e %d\n", i, MQ*h_list.Jx[i], MQ*h_list.Jy[i], h_list.ix[i],
+				h_list.iy[i], h_list.p[i]/sgm, Cluster_index[i]);
 			}
 			fclose(fp);
 
 			int NC;
-			if (N_cloud < ICLOUD_FITS_MAX)
+			if (N_cloud < N_cloud_max)
 				NC = N_cloud;
 			else
-				NC = ICLOUD_FITS_MAX;
+				NC = N_cloud_max;
 
 			Cloud *cloud = (Cloud *)malloc((N_cloud+1)*sizeof(Cloud));
 
-			// Computing stats for the ICLOUD_STATS_MAX brightest clouds			
-			cloud_stats(h_list, h_Pixel_counter, N_cloud, Cluster_index, cloud);
+			// Computing stats for the N_cloud brightest clouds			
+			cloud_stats(h_list, h_Pixel_counter, N_cloud, Cluster_index, cloud, sgm, MQ);
 
-			create_mosaic(Nx, Ny, h_list, h_Pixel_counter, Cluster_index, NC, name0, cloud);
+// 			Not sure how useful the mosaic is
+//			create_mosaic(Nx, Ny, h_list, h_Pixel_counter, Cluster_index, NC, name0, cloud);
 
 			// Saving fits stacks for the most significant motion detections (clouds)
 			char fits_name[100];

@@ -642,8 +642,8 @@ void sigma_clipping(float *image, long plane_pixels, double Nsigma, double *p0, 
 		
 		long Npixels = Nx*Ny;
 		
-		float *img1 = my_alloc_real();
-		//(float *)malloc(Npixels*sizeof(float));
+//		float *img1 = my_alloc_real();
+		float *img1 = (float *)malloc(Npixels*sizeof(float));
 		
 		
 		for (long i = 0; i < Npixels; i++)
@@ -678,7 +678,8 @@ void sigma_clipping(float *image, long plane_pixels, double Nsigma, double *p0, 
 		fits_error(status);
 		fits_close_file(fk, &status);		
 		
-		my_free_real(img1);
+//		my_free_real(img1);
+		free(img1);
 		
 		return;
 	}
@@ -950,6 +951,21 @@ void borders(float *img, int Nx, int Ny, int BW)
 		for (int y=0; y<Ny; y++)
 		{
 			if (x<BW || x>=Nx-BW || y<BW || y>=Ny-BW)
+				img[x*Ny+y] = MASK0;
+		}
+	}
+	return;
+}
+/* ------------------------------------------------ */
+
+void erase_hot_pixels(float *img, int Nx, int Ny, float p_max)
+{
+		
+	for (int x=0; x<Nx; x++)
+	{
+		for (int y=0; y<Ny; y++)
+		{
+			if (img[x*Ny+y] > p_max)
 				img[x*Ny+y] = MASK0;
 		}
 	}

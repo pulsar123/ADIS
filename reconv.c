@@ -44,20 +44,21 @@ int main(int argc, char **argv)
 		
 		printf("\n Syntax (any order):\n\n");
 		printf(" %s  -m master_image  -o output_images_prefix  -FWHM value  -R kernel_radius  image1 image2 ... \n\n", argv[0]);
-		printf(" -m master_image  :  name of the master image (the stacked version of all input images) \n");
-		printf(" -o name          :  prefix for output images \n");
-		printf(" -FWHM value      :  FWHM in pixels (measured from the master image) \n");
-		printf(" -R kernel_radius :  kernel radius in FWHM units \n");
-		printf(" image1  ...      :  list of input FITS images (RGB only)\n");
+		printf(" -m master_image   :  name of the master image (the stacked version of all input images) \n");
+		printf(" -o name           :  prefix for output images \n");
+		printf(" -FWHM value       :  FWHM in pixels (measured from the master image) \n");
+		printf(" -R kernel_radius  :  kernel radius in FWHM units \n");
+		printf(" image1  ...       :  list of input FITS images (RGB only)\n");
 		printf("\n Optional arguments [default value]:\n\n");
-		printf(" -bg value        :  number of vertical tiles for bilinear background subtraction [5]\n");
-		printf(" -bias value      :  bias for the output image [0]\n");
-		printf(" -border width    :  mask out the output image border, the width is in kernel_radius units [0]\n");
-		printf(" -grow_mask sgm   :  grow star masks using gaussian with sgm size (FWHM units)\n");
-		printf(" -k image_name    :  output kernel image\n");
-		printf(" -mask value      :  mask image pixels above this many master std\n");
-		printf(" -no_rescale      :  do not rescale brightness\n");
-		printf(" -v               :  verbose\n");
+		printf(" -bg value         :  number of vertical tiles for bilinear background subtraction [5]\n");
+		printf(" -bias value       :  bias for the output image [0]\n");
+		printf(" -border width     :  mask out the output image border, the width is in kernel_radius units [0]\n");
+		printf(" -grow_mask sgm    :  grow star masks using gaussian with sgm size (FWHM units)\n");
+		printf(" -hot_pixels value :  mask pixels this mant std above the floor\n");
+		printf(" -k image_name     :  output kernel image\n");
+		printf(" -mask value       :  mask image pixels above this many master std\n");
+		printf(" -no_rescale       :  do not rescale brightness\n");
+		printf(" -v                :  verbose\n");
 		printf("\n");		
 		exit(0);
 	}
@@ -79,6 +80,8 @@ int main(int argc, char **argv)
 	int grow_mask = 0;
 	float mask_sgm = 0.0;
 	int NTx = 5;
+	int hot_pixels = 0;
+	float hot_pixels_std = 0.0;
 	
 	int N_obligatory = 4; // Number of obligatory arguments
 	int j = 1; // j counts all arguments
@@ -251,6 +254,21 @@ int main(int argc, char **argv)
 			assert(mask_sgm>0);
 		}						
 
+		// Erasing hot pixels from the smoothed image
+		if (strcmp(argv[j],"-hot_pixels") == 0)
+		{
+			j++;
+			j0 = j0 + 2;
+			if (argv[j][0] == '-' || j>=argc)
+			{
+				error = j-1;
+				break;
+			}
+			hot_pixels_std = atof(argv[j]);
+			hot_pixels = 1;
+			assert(hot_pixels_std>0);
+		}						
+
 		j++;
 	} // /end of argv while loop
 	
@@ -366,7 +384,7 @@ int main(int argc, char **argv)
 
 	if (verbose)
 	{
-		printf("\nMaster sgm clipping : %d %e %e %ld\n", k_master, sgm_master, p_master, Npix_master);		
+		printf("\nMaster sgm clipping : %d, sgm=%e, p=%e, Npix=%ld\n", k_master, sgm_master, p_master, Npix_master);		
 	}
 	
 	// Direct 2D FFT transform of padded img0/img1 with zero imaginary part -> F0/F1
@@ -481,6 +499,9 @@ int main(int argc, char **argv)
 		if(verbose)
 			printf("\nBackground model: %d x %d tiles, %d x %d pixels each\n", NTy, NTx, Ny/NTy, Nx/NTx);
 		subtract_background(0, 1, outbuf, Nx, Ny, NTx, NTy, outbias);
+
+		if (hot_pixels)
+			erase_hot_pixels(outbuf, Nx, Ny, hot_pixels_std*sgm1+outbias);
 
 		// Grow masked stars if requested:
 		if (mask && grow_mask)

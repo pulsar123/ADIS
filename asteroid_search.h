@@ -25,17 +25,16 @@
 #define NB 31
 
 // Maximum number of stored brighest pixels
-#define MAX_PIXELS 100000000
+#define MAX_PIXELS 10000000
 
 #define FIND_MAXIMUM_BS 512 // block size for the find_maximum kernel
 
-#define ICLOUD_FITS_MAX 10  // Number of the fits files to save for the brightest motion detections
 #define ICLOUD_STATS_MAX 1000  // Number of the top clouds to compute statistics for
 
 // Histogram parameters:
 #define NVECTORS 1000 // Number of motion vectors used to figure out p_min
 #define DEL_SGM 0.1 // Bin width, in sgm units
-#define NBIN 1000
+#define NBIN 10000
 
 
 //__device__ int i_free_pixel;
@@ -95,7 +94,7 @@ __global__ void find_neighbours(int N_members, int N_cloud, unsigned int Pixel_c
 
 __global__ void find_maximum (int step, int N, float *vec, int *index, int *d_cloud, float *vec_out, int *index_out, int N_cloud, int *d_members);
 
-void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *Cluster_index, Cloud *cloud);
+void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *Cluster_index, Cloud *cloud, float sgm, float MQ);
 
 void save_cloud_fits (int Nx, int Ny, int Nc, float *img, const char *name, const char *name0, Cloud *cloud, int i_cloud, float sgm);
 
