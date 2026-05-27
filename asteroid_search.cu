@@ -17,8 +17,8 @@ int main(int argc, char **argv)
     double restime;
 	int status = 0, naxis;
     long naxes[2];
-	long Npix;
-	int Nx, Ny, Nc, Nx0, Ny0;
+	long Npix, Npix_ini;
+	int Nx, Ny, Nx0, Ny0, Nx_ini, Ny_ini;
 	float *buf0; // host
 	size_t pitch;
 	char date_obs[30];
@@ -41,9 +41,10 @@ int main(int argc, char **argv)
 		printf(" image1  ...        : list of B&W input FITS images (preprocessed with reconv)\n");
 		printf("\n Optional arguments [default value]:\n\n");
 		printf(" -finetune x y Jx Jy: do finetuning search for one cluster described by the 4D coords (pixels)\n");
-		printf(" -list file         : instead of motion object detection, use the list generated in a prior detection run\n");
+//		printf(" -list file         : instead of motion object detection, use the list generated in a prior detection run\n");
 		printf(" -N_cloud value     : maximum number of cloud fits files to save [10]\n");
 		printf(" -N_noise value     : parameter used during the histogram step (in std units) [10]\n");
+		printf(" -rebin value       : image rebinning factor for x and y, in pixels [1]\n");
 		printf(" -RMIN value        : shortest motion vector (in FWHM units) [1]\n");
 		printf("\n In the finetune mode, the meaning of RMIN and RMAX changes:\n");
 		printf(" RMIN: ignored\n");
@@ -57,8 +58,10 @@ int main(int argc, char **argv)
 	float Step = 0.5;
 	int N_noise = 10;
 	int N_cloud_max = 10;
+	int Center_pix_ini[4];
 	int Center_pix[4];
 	int finetune = 0;
+	int rebin = 1;
 	
 	int N_obligatory = 2; // Number of obligatory arguments
 	int j = 1; // j counts all arguments
@@ -78,6 +81,7 @@ int main(int argc, char **argv)
 				break;
 			}
 			RMAXf = atof(argv[j]);
+			assert(RMAXf > 0);
 			iob++;
 		}
 		
@@ -91,6 +95,7 @@ int main(int argc, char **argv)
 				break;
 			}
 			Step = atof(argv[j]);
+			assert(Step > 0);
 			iob++;
 		}		
 		
@@ -108,7 +113,7 @@ int main(int argc, char **argv)
 					error = j-1;
 					break;
 				}
-				Center_pix[i] = atoi(argv[j]);
+				Center_pix_ini[i] = atoi(argv[j]);
 			}
 		}		
 
@@ -122,6 +127,7 @@ int main(int argc, char **argv)
 				break;
 			}
 			N_cloud_max = atoi(argv[j]);
+			assert(N_cloud_max > 0);
 		}		
 
 		if (strcmp(argv[j],"-N_noise") == 0)
@@ -134,8 +140,22 @@ int main(int argc, char **argv)
 				break;
 			}
 			N_noise = atoi(argv[j]);
+			assert(N_noise > 0);
 		}		
 
+		if (strcmp(argv[j],"-rebin") == 0)
+		{
+			j++;
+			j0 = j0 + 2;
+			if (argv[j][0] == '-' || j>=argc)
+			{
+				error = j-1;
+				break;
+			}
+			rebin = atoi(argv[j]);
+			assert(rebin > 0);
+		}
+		
 		if (strcmp(argv[j],"-RMIN") == 0)
 		{
 			j++;
@@ -146,6 +166,7 @@ int main(int argc, char **argv)
 				break;
 			}
 			RMINf = atof(argv[j]);
+			assert(RMINf > 0);
 		}
 		
 		j++;
@@ -172,6 +193,20 @@ int main(int argc, char **argv)
 	// Switching from FWHM to MQ=FWHM*Step units
 	int RMIN = (int)(RMINf/Step + 0.5);
 	int RMAX = (int)(RMAXf/Step + 0.5);
+	
+	// Offsets (used when converting rebinned image pixel coordinates to non-rebin pixels image)
+	int d_rebin = (rebin - 1) / 2;	
+	
+	// Switching to rebinned pixel coordinates:
+	for (int j=0; j<4; j++)
+	{
+		if (j < 2)
+			// For ix, iy coordinates we need both recenter and scale:
+			Center_pix[j] = (Center_pix_ini[j]-d_rebin) / rebin;
+		else
+			// For Jx, Jy coordinates (which are differential by nature), we only need to rescale:
+			Center_pix[j] = Center_pix_ini[j] / rebin;
+	}
 	
 	Is_GPU_present();
 	size_t free_mem, total_mem;
@@ -210,6 +245,7 @@ int main(int argc, char **argv)
 
 	double bias = 0.0;
 	float FWHM;
+	printf("\n");
 	
 	// Reading input FITS images one by one, using cudaMemcpyAsync to do concurrent copying to the GPU
 	for (int i_image=0; i_image<N_images; i_image++)
@@ -217,7 +253,6 @@ int main(int argc, char **argv)
 		if (i_image == 0)
 			sprintf(name0,"%s",argv[j0]);
 		// Reading the next input FITS file
-		printf("\nReading file %s\n", argv[j0+i_image]);
 		fitsfile *f0;
 		char *file0 = argv[j0+i_image];
 		fits_open_file(&f0, file0, READONLY, &status);
@@ -225,6 +260,7 @@ int main(int argc, char **argv)
 		
 		if (i_image == 0)
 		{
+			// FWHM is read from the first input image, it is for the original (not-rebinned) image, in pixels
 			fits_read_key(f0, TFLOAT, "FWHM", &FWHM, NULL, &status);
 			fits_read_key(f0, TDOUBLE, "BIAS", &bias, NULL, &status);
 		}
@@ -240,7 +276,7 @@ int main(int argc, char **argv)
 		if (i_image == 0)
 			mjd0 = mjd;
 		h_dt[i_image] = mjd - mjd0; //  in days
-		printf("DATE-OBS: %s : %lf\n", date_obs, h_dt[i_image]);
+//		printf("DATE-OBS: %s : %lf\n", date_obs, h_dt[i_image]);
 #endif		
 		
 		fits_get_img_dim(f0, &naxis, &status);
@@ -253,34 +289,36 @@ int main(int argc, char **argv)
 			return EXIT_FAILURE;
 		}
 	
-		Nx = naxes[1];
-		Ny = naxes[0];
+		// Original image size (before rebinning):
+		Nx_ini = naxes[1];
+		Ny_ini = naxes[0];
+		// Size after rebinning (including incomplete bins at the end):
+		Nx = (Nx_ini+rebin-1)/rebin;
+		Ny = (Ny_ini+rebin-1)/rebin;
+		Npix_ini = (long)Nx_ini * Ny_ini;
+		Npix = (long)Nx * Ny;
 		if (i_image == 0)
 		{
 			Nx0 = Nx;
 			Ny0 = Ny;
-			Nc = 1;
-			Npix = (long)Nx * Ny;
-			buf0 = (float *)malloc(sizeof(float) * Npix * Nc);
+			buf0 = (float *)malloc(sizeof(float) * Npix_ini);
+			ERR( cudaMallocHost(&h_image1, sizeof(float)*Npix) )
 		}
 		else
 		{
 			if (Nx != Nx0 || Ny != Ny0)
 			{
-				fprintf(stderr, "Error: mismatching input images\n");
-				return EXIT_FAILURE;
+				fprintf(stderr, "\nError: mismatching input images\n");
+				exit(1);
 			}
 		}
 		
-		fits_read_img(f0, TFLOAT, 1, Npix * Nc, NULL, buf0, NULL, &status);
+		fits_read_img(f0, TFLOAT, 1, Npix_ini, NULL, buf0, NULL, &status);
 		fits_error(status);
 		fits_close_file(f0, &status);		
-
-		if (i_image == 0)
-			ERR( cudaMallocHost(&h_image1, sizeof(float)*Npix) )
 		
-		// Subtracting bias from each image:
-		rebin(buf0, &Nx, &Ny, &Npix, &h_image1, bias);
+		// Subtracting bias from each image, and optional rebinning:
+		rebinning(buf0, Nx_ini, Ny_ini, Nx, Ny, bias, rebin, h_image1);
 		
 		// x is for the rows, y is for columns
 		// This is the host-device sync point
@@ -289,8 +327,8 @@ int main(int argc, char **argv)
 
 		cudaMemGetInfo(&free_mem, &total_mem);
 
-		printf("Nx=%d, Ny=%d, pitch=%d, free GPU memory=%f GB\n", Nx, Ny, (int)(pitch/sizeof(float)),
-		(float)(free_mem)/(1024*1024*1024));
+		printf("Reading file %s; ", argv[j0+i_image]);
+		printf("Nx=%d, Ny=%d, free GPU memory=%f GB\n", Nx, Ny, (float)(free_mem)/(1024*1024*1024));
 		
 		if (i_image == 0)
 		{
@@ -317,14 +355,14 @@ int main(int argc, char **argv)
 	timeval_subtract (&restime, &tdr3, &tdr);
 	printf("\nImage processing time, per image: %e seconds\n\n", restime/N_images);
 		
-	// The mesh step (Motion Quantum) in pixels:
-	float MQ = Step * FWHM; 
+	// The mesh step (Motion Quantum) in rebinned pixels:
+	float MQ = Step * FWHM/rebin; 
 
 	float R0;
 	if (finetune)
 	{
 		// Central radius in finetune mode (in MQ units):
-		R0 = sqrt(pow(Center_pix[2],2) + pow(Center_pix[3],2)) / MQ;
+		R0 = sqrt(pow(Center_pix[2],2) + pow(Center_pix[3]/rebin,2)) / MQ;
 	}
 	
 #ifndef TEST
@@ -350,7 +388,10 @@ int main(int argc, char **argv)
 		// RMAX is limited by the image diagonal length (distance between the farthest tiles):
 		int diag = floor(NB * sqrt(pow(Nxb-1,2) + pow(Nyb-1,2)) / MQ);
 		if (RMAX > diag)
+		{
 			RMAX = diag;
+			printf("\nLimiting the search to RMAX=%f in FWHM units\n", RMAX*Step);
+		}
 		if (RMAX < 0)
 			RMAX = 0;
 		if (RMIN < 0)
@@ -369,7 +410,7 @@ int main(int argc, char **argv)
 	cudaMemcpy(d_Pixel_counter, &h_Pixel_counter, sizeof(unsigned int), cudaMemcpyHostToDevice);
 	
 	cudaMemGetInfo(&free_mem, &total_mem);
-	printf("GPU memory: Free: %f GB, Total: %f GB\n\n", (float)free_mem/(1024*1024*1024), (float)total_mem/(1024*1024*1024));
+//	printf("GPU memory: Free: %f GB, Total: %f GB\n\n", (float)free_mem/(1024*1024*1024), (float)total_mem/(1024*1024*1024));
 
 	dim3 Block_size(32,32);
 	// Used for image erase
@@ -571,8 +612,8 @@ int main(int argc, char **argv)
 		printf("No motion vectors in the given range of R=RMIN...RMAX\n");
 	else
 	{
-		printf("Processed %d motion vectors\n", Jcount);
-		printf ("time per motion vector: %e\n", restime/Jcount);
+		printf("Processed %d motion vectors\n\n", Jcount);
+		printf ("Time per motion vector: %e\n", restime/Jcount);
 		
 		ERR( cudaMemcpy(&h_Pixel_counter, d_Pixel_counter, sizeof(unsigned int), cudaMemcpyDeviceToHost))
 		cudaDeviceSynchronize();
@@ -598,9 +639,10 @@ int main(int argc, char **argv)
 					imax = i;
 				}
 			}
-			printf("Motion vector for the brightest pixel: (%8.2f, %8.2f); pixel coords: (%d, %d); p=%f (%f std), i=%d\n",
-			MQ*h_list.Jx[imax], MQ*h_list.Jy[imax], h_list.ix[imax], h_list.iy[imax], h_list.p[imax],
-			h_list.p[imax]/sgm, imax);
+			printf("Motion vector for the brightest pixel: (%8.2f, %8.2f); pixel coords: (%d, %d); p=%f (%f std)\n",
+			rebin*MQ*h_list.Jx[imax], rebin*MQ*h_list.Jy[imax], rebin*h_list.ix[imax]+d_rebin, 
+			rebin*h_list.iy[imax]+d_rebin, h_list.p[imax],
+			h_list.p[imax]/sgm);
 			
 			int *Cluster_index = (int *)malloc(h_Pixel_counter*sizeof(int));			
 			
@@ -621,7 +663,7 @@ int main(int argc, char **argv)
 
 			tdr = tdr0;
 			timeval_subtract (&restime, &tdr1, &tdr);
-			printf("Cluster analysis CPU: %e s\n", restime);
+//			printf("Cluster analysis CPU: %e s\n", restime);
 			tdr = tdr1;
 			timeval_subtract (&restime, &tdr2, &tdr);
 			printf("Cluster analysis GPU: %e s\n", restime);
@@ -630,9 +672,10 @@ int main(int argc, char **argv)
 			FILE *fp = fopen("list.dat", "w");
 			for (int i=0; i<h_Pixel_counter; i++)
 			{
-				// Jx, Jy are converted to pixels:
-				fprintf(fp, "%d %f %f %d %d %11e %d\n", i, MQ*h_list.Jx[i], MQ*h_list.Jy[i], h_list.ix[i],
-				h_list.iy[i], h_list.p[i]/sgm, Cluster_index[i]);
+				// Jx, Jy are converted to the original (non-rebinned) pixels:
+				fprintf(fp, "%d %f %f %d %d %11e %d\n", i, rebin*MQ*h_list.Jx[i], rebin*MQ*h_list.Jy[i],
+				rebin*h_list.ix[i]+d_rebin,
+				rebin*h_list.iy[i]+d_rebin, h_list.p[i]/sgm, Cluster_index[i]);
 			}
 			fclose(fp);
 
@@ -645,7 +688,8 @@ int main(int argc, char **argv)
 			Cloud *cloud = (Cloud *)malloc((N_cloud+1)*sizeof(Cloud));
 
 			// Computing stats for the N_cloud brightest clouds			
-			cloud_stats(h_list, h_Pixel_counter, N_cloud, Cluster_index, cloud, sgm, MQ);
+			cloud_stats(h_list, h_Pixel_counter, N_cloud, Cluster_index, cloud, sgm, MQ, finetune,
+				rebin, d_rebin);
 
 // 			Not sure how useful the mosaic is
 //			create_mosaic(Nx, Ny, h_list, h_Pixel_counter, Cluster_index, NC, name0, cloud);
@@ -672,7 +716,8 @@ int main(int argc, char **argv)
 				cudaDeviceSynchronize();
 				sprintf(fits_name,"cloud_%03d.fit", icloud);
 				
-				save_cloud_fits(Nx, Ny, 1, h_test_image, fits_name, name0, cloud, icloud, sgm);
+				save_cloud_fits(Nx_ini, Ny_ini, Nx, Ny, 1, h_test_image, fits_name, name0, cloud, icloud,
+					sgm, rebin, d_rebin);
 			}
 			free(Cluster_index);
 	

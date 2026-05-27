@@ -669,8 +669,8 @@ __global__ void find_neighbours(int N_members, int N_cloud, unsigned int Pixel_c
 
 /* ------------------------------------------------ */
 
-void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *Cluster_index, Cloud *cloud,
- float sgm, float MQ)
+void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *Cluster_index,
+ Cloud *cloud, float sgm, float MQ, int finetune, int rebin, int d_rebin)
 // Computing basic stats for the brightest clouds
 {
 	int NC;
@@ -679,8 +679,13 @@ void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *C
 	else
 		NC = ICLOUD_STATS_MAX;
 	
-	FILE *fp = fopen("stats.dat", "w");	
+	FILE *fp;	
 	
+	if (finetune)
+		fp = fopen("stats_fine.dat", "w");
+	else
+		fp = fopen("stats.dat", "w");
+
 	for (int icloud=0; icloud<NC; icloud++)
 	{
 		float pmax = -1e30;
@@ -750,10 +755,13 @@ void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *C
 		cloud[icloud].N = N;
 		cloud[icloud].mass = mass;				
 		
-		float rad_xy = MQ*sqrt(pow((ix_max-ix_min)/2.0,2) + pow((ix_max-ix_min)/2.0,2));
-		float rad_J = MQ*sqrt(pow((Jx_max-Jx_min)/2.0,2) + pow((Jx_max-Jx_min)/2.0,2));
-		fprintf(fp, "%4d %11e %4d %4d %8.2f %8.2f %7d %11e %8.2f %8.2f\n", icloud, pmax/sgm, h_list.ix[imax],
-		h_list.iy[imax], MQ*h_list.Jx[imax], MQ*h_list.Jy[imax], N, mass, rad_xy, rad_J);
+		// Switching to original (before rebinning) pixel size:
+		float rad_xy = rebin*MQ*sqrt(pow((ix_max-ix_min)/2.0,2) + pow((ix_max-ix_min)/2.0,2));
+		float rad_J = rebin*MQ*sqrt(pow((Jx_max-Jx_min)/2.0,2) + pow((Jx_max-Jx_min)/2.0,2));
+		fprintf(fp, "%4d %11e %4d %4d %8.2f %8.2f %7d %11e %8.2f %8.2f\n", icloud, pmax/sgm,
+		rebin*h_list.ix[imax]+d_rebin,
+		rebin*h_list.iy[imax]+d_rebin,
+		rebin*MQ*h_list.Jx[imax], rebin*MQ*h_list.Jy[imax], N, mass, rad_xy, rad_J);
 	}
 	
 	fclose(fp);
@@ -762,25 +770,56 @@ void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *C
 
 /* ------------------------------------------------ */
 	
-	void save_cloud_fits (int Nx, int Ny, int Nc, float *img, const char *name, const char *name0, Cloud *cloud, int icloud, float sgm)
-	// Dump a 2D image into a FITS file (for debugging)
+	void save_cloud_fits (int Nx_ini, int Ny_ini, int Nx, int Ny, int Nc, float *img, const char *name,
+		const char *name0, Cloud *cloud, int icloud, float sgm, int rebin, int d_rebin)
+		// Saving the stacked image as a fits file, doing upscaling (if rebin>1)
 	{
 		char buffer[100];
 		int status=0; 
 		float bias = 0.03;
 		
-		long Npixels = Nx*Ny;
-		
-		float *img1 = (float *)malloc(Npixels*sizeof(float));
-		
-		
-		for (long i = 0; i < Npixels; i++)
+		// The file will be using the native (unbinned) resolution:
+		long Npix_ini = Nx_ini*Ny_ini;		
+		float *img1 = (float *)malloc(Npix_ini*sizeof(float));
+				
+	if (rebin > 1)
+	{
+		// Looping over the binned pixels:
+		for (int ix=0; ix<Nx; ix++)
+			for (int iy=0; iy<Ny; iy++)
+				// Looping over the original resolution pixels
+				{
+					for (int jx=0; jx<rebin; jx++)
+					{
+						int ix_ini = ix*rebin + jx;
+						for (int jy=0; jy<rebin; jy++)
+						{
+							int iy_ini = iy*rebin + jy;
+							// Handling potential incomplete rows and columns at the end:
+							if (ix_ini<Nx_ini && iy_ini<Ny_ini)
+							{
+								// Using one binned pixel to paint over the whole rebin x rebin area
+								// of the native resolution image
+								if (img[ix*Ny+iy] > MASK)
+									img1[ix_ini*Ny_ini+iy_ini] = img[ix*Ny+iy] + bias;
+								else
+									img1[ix_ini*Ny_ini+iy_ini] = bias - 4*sgm;  // Making masked areas darker
+							}
+						}
+					}
+				}
+	}
+
+	else
+	{
+		for (long i = 0; i < Npix_ini; i++)
 		{
 			if (img[i] > MASK)
 				img1[i] = img[i] + bias;
 			else
 				img1[i] = bias - 4*sgm;  // Making masked areas darker
 		}
+	}
 		
 		sprintf(buffer, "rm -f %s >/dev/null", name);
 		if (system(buffer))
@@ -796,13 +835,17 @@ void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *C
 		fits_copy_header(f0, fk, &status);
 		fits_error(status);
 
-		int Box_size = 100; // box size in pixels
+		int Box_size = 50; // box size in pixels
 		int BS2 = Box_size/2;
-		sprintf(buffer, "%d;%d;%d;%d;-1.0;Cloud %d;", cloud[icloud].iy-BS2, cloud[icloud].ix-BS2,
-		cloud[icloud].iy+BS2,cloud[icloud].ix+BS2,icloud);
+		sprintf(buffer, "%d;%d;%d;%d;-1.0;Cloud %d;", 
+		rebin*cloud[icloud].iy+d_rebin-BS2, 
+		rebin*cloud[icloud].ix+d_rebin-BS2,
+		rebin*cloud[icloud].iy+d_rebin+BS2,
+		rebin*cloud[icloud].ix+d_rebin+BS2,
+		icloud);
 		fits_write_key(fk, TSTRING, "ANNOTATE", buffer, NULL, &status);
 		
-		long nelem1  = (long)Nx * Ny * Nc;
+		long nelem1  = (long)Nx_ini * Ny_ini * Nc;
 		long fpixel = 1;
 		fits_write_img(fk, TFLOAT, fpixel, nelem1, img1, &status);
 		fits_error(status);

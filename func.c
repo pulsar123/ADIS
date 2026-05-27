@@ -739,13 +739,62 @@ void crop(float *img, int *Nx, int *Ny, long *Npix, float crop_fraction)
 /* ------------------------------------------------ */
 
 
-void rebin(float *buf0, int *Nx, int *Ny, long *Npix, float** h_image, double bias)
+void rebinning(float *buf0, int Nx_ini, int Ny_ini, int Nx, int Ny, double bias, int rebin, float *image)
 {
+	int Npix_ini = Nx_ini * Ny_ini;
 	
-	for (long i=0; i<*Npix; i++)
+	// Optional rebinning of the image, with the bin size of "rebin" pixels in each dimension
+	// Last columns / rows may be incomplete (have fewer than rebin columns/rows)
+	// Masked images are treated properly (at least 50% of binned pixels need to be masked to create
+	// a binned masked pixel)
+	if (rebin > 1)
 	{
-		(*h_image)[i] = buf0[i] - bias;
+		// Looping over the binned pixels:
+		for (int ix=0; ix<Nx; ix++)
+			for (int iy=0; iy<Ny; iy++)
+				// Looping over the original pixels which contribute to the binned pixel
+				{
+					double sum = 0.0;
+					int n_nomask = 0;
+					int n_mask = 0;
+					for (int jx=0; jx<rebin; jx++)
+					{
+						int ix_ini = ix*rebin + jx;
+						for (int jy=0; jy<rebin; jy++)
+						{
+							int iy_ini = iy*rebin + jy;
+							// Handling potential incomplete rows and columns at the end:
+							if (ix_ini<Nx_ini && iy_ini<Ny_ini)
+							{
+								if (buf0[ix_ini*Ny_ini + iy_ini] > MASK)
+								{
+									n_nomask++;
+									sum = sum + buf0[ix_ini*Ny_ini + iy_ini];
+								}
+								else
+								{
+									n_mask++;
+								}
+							}
+						}
+					}
+					if (n_nomask >= n_mask)
+						image[ix*Ny + iy] = sum / n_nomask - bias;
+					else
+						image[ix*Ny + iy] = MASK0;					
+				}
 	}
+	
+	else
+	
+	// No rebinning
+	{
+		for (long i=0; i<Npix_ini; i++)
+		{
+			image[i] = buf0[i] - bias;
+		}
+	}
+		
 	
 	return;
 	

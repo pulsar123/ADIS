@@ -94,9 +94,11 @@ __global__ void find_neighbours(int N_members, int N_cloud, unsigned int Pixel_c
 
 __global__ void find_maximum (int step, int N, float *vec, int *index, int *d_cloud, float *vec_out, int *index_out, int N_cloud, int *d_members);
 
-void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *Cluster_index, Cloud *cloud, float sgm, float MQ);
+void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *Cluster_index, 
+	Cloud *cloud, float sgm, float MQ, int finetune, int rebin, int d_rebin);
 
-void save_cloud_fits (int Nx, int Ny, int Nc, float *img, const char *name, const char *name0, Cloud *cloud, int i_cloud, float sgm);
+void save_cloud_fits (int Nx_ini, int Ny_ini, int Nx, int Ny, int Nc, float *img, const char *name,
+ const char *name0, Cloud *cloud, int i_cloud, float sgm, int rebin, int d_rebin);
 
 __global__ void erase_image (float *image, size_t pitch, int Nx, int Ny, double bias);
 
