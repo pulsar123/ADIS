@@ -27,8 +27,32 @@ void Is_GPU_present()
     }
   return;
 }
+/* ------------------------------------------------ */
 
+double MJD_FITS (fitsfile *f0)
+// Computing the MJD (Modified Julian calendar Date) value (in days) corresponding to the middle
+// of the exposure, based on the FITS file header.
+{
+	char date_obs[30];
+	int year, month, day, hour, minute;
+    double second, exposure;	
+	int status;
+		
+	fits_read_key(f0, TSTRING, "DATE-OBS", date_obs, NULL, &status);
+	fits_error(status);
 
+	fits_read_key(f0, TDOUBLE, "EXPTIME", &exposure, NULL, &status);
+	fits_error(status);
+
+	fits_str2time(date_obs, &year, &month, &day,
+			  &hour, &minute, &second, &status);
+	fits_error(status);
+	
+	 // Modified Julian Date (UT) of the middle of exposure
+	double mjd = exposure/2.0/86400 + date2mjd (year, month, day) + ((second/60.0+minute)/60.0+hour)/24.0;
+	
+	return mjd;
+}	
 
 /* ------------------------------------------------ */
 /*
@@ -45,7 +69,9 @@ void fits_error(int status)
 	
 /* ------------------------------------------------ */
 	
-__global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch, int Ix1, int Iy1, int Jx, int Jy, float MQ, float p_min, float *d_dt, float *d_test_image, List d_list, int save_image, unsigned int *d_Pixel_counter, int Nx, int Ny)
+__global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch, int Ix1, int Iy1, int Jx,
+	int Jy, float MQ, float p_min, float *d_dt, float *d_test_image, List d_list, int save_image,
+	unsigned int *d_Pixel_counter, int Nx, int Ny, int crop, int *d_dx_fixed, int *d_dy_fixed)
 {
 	// The main compute kernel: searches for moving objects over all images,
 	// all allowed base image tiles, for the given motion vector (Jx,Jy) in MQ units
@@ -73,9 +99,20 @@ __global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch,
 	// Loping over all images sequentially:
 	for (int i=0; i<N_images; i++)
 	{
+		float dx, dy;
 		// Motion vector for the image i in pixels:
-		float dx = d_dt[i] * Jx*MQ;
-		float dy = d_dt[i] * Jy*MQ;
+		if (crop)
+		{
+			// In the crop mode, we subtract the fixed shifts from each motion vector,
+			// and now dx,dy is the residual motion vector.
+			dx = d_dt[i] * Jx*MQ - d_dx_fixed[i];
+			dy = d_dt[i] * Jy*MQ - d_dy_fixed[i];
+		}
+		else
+		{
+			dx = d_dt[i] * Jx*MQ;
+			dy = d_dt[i] * Jy*MQ;
+		}
 		// Pixel coordinates of the base transposed pixel:
 		int ix0 = ix + floor(dx);
 		int iy0 = iy + floor(dy); // Fastest changing index
@@ -670,7 +707,7 @@ __global__ void find_neighbours(int N_members, int N_cloud, unsigned int Pixel_c
 /* ------------------------------------------------ */
 
 void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *Cluster_index,
- Cloud *cloud, float sgm, float MQ, int finetune, int rebin, int d_rebin)
+ Cloud *cloud, float sgm, float MQ, int finetune, int rebin, int d_rebin, int X00, int Y00)
 // Computing basic stats for the brightest clouds
 {
 	int NC;
@@ -759,8 +796,8 @@ void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *C
 		float rad_xy = rebin*MQ*sqrt(pow((ix_max-ix_min)/2.0,2) + pow((ix_max-ix_min)/2.0,2));
 		float rad_J = rebin*MQ*sqrt(pow((Jx_max-Jx_min)/2.0,2) + pow((Jx_max-Jx_min)/2.0,2));
 		fprintf(fp, "%4d %11e %4d %4d %8.2f %8.2f %7d %11e %8.2f %8.2f\n", icloud, pmax/sgm,
-		rebin*h_list.ix[imax]+d_rebin,
-		rebin*h_list.iy[imax]+d_rebin,
+		rebin*h_list.ix[imax]+d_rebin+X00,
+		rebin*h_list.iy[imax]+d_rebin+Y00,
 		rebin*MQ*h_list.Jx[imax], rebin*MQ*h_list.Jy[imax], N, mass, rad_xy, rad_J);
 	}
 	
@@ -771,12 +808,12 @@ void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *C
 /* ------------------------------------------------ */
 	
 	void save_cloud_fits (int Nx_ini, int Ny_ini, int Nx, int Ny, int Nc, float *img, const char *name,
-		const char *name0, Cloud *cloud, int icloud, float sgm, int rebin, int d_rebin)
+		const char *name0, Cloud *cloud, int icloud, float sgm, int rebin, int d_rebin, double bias,
+		int crop, int X00, int Y00)
 		// Saving the stacked image as a fits file, doing upscaling (if rebin>1)
 	{
 		char buffer[100];
 		int status=0; 
-		float bias = 0.03;
 		
 		// The file will be using the native (unbinned) resolution:
 		long Npix_ini = Nx_ini*Ny_ini;		
@@ -812,12 +849,37 @@ void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *C
 
 	else
 	{
-		for (long i = 0; i < Npix_ini; i++)
+		if (crop)
 		{
-			if (img[i] > MASK)
-				img1[i] = img[i] + bias;
-			else
-				img1[i] = bias - 4*sgm;  // Making masked areas darker
+			for (int i=0; i < Npix_ini; i++)
+				img1[i] = MASK0;
+
+			for (int ix=0; ix<Nx; ix++)
+			{
+				int ix_ini = ix + X00 - Nx/2;
+				for (int iy=0; iy<Ny; iy++)
+				{
+					int iy_ini = iy + Y00 - Ny/2;
+					
+					if (ix_ini>=0 && ix_ini<Nx_ini && iy_ini>=0 && iy_ini<Ny_ini)
+						if (img[ix*Ny+iy] > MASK)
+							img1[ix_ini*Ny_ini+iy_ini] = img[ix*Ny+iy] + bias;
+						else
+							img1[ix_ini*Ny_ini+iy_ini] = bias - 4*sgm;	
+				}
+			}
+			
+		}
+		
+		else
+		{
+			for (long i = 0; i < Npix_ini; i++)
+			{
+				if (img[i] > MASK)
+					img1[i] = img[i] + bias;
+				else
+					img1[i] = bias - 4*sgm;  // Making masked areas darker
+			}
 		}
 	}
 		
@@ -1001,6 +1063,34 @@ __global__ void compute_histogram (List d_list, unsigned int Pixel_counter, floa
 	
 	atomicAdd(&d_hist[bin], 1);
 
+	return;
+}
+
+
+/* ------------------------------------------------ */
+
+void cropping(float *buf0, int Nx_ini, int Ny_ini, int Nx, int Ny, double bias, int X0, int Y0,
+ float *image)
+// Crop an image of size Nx x Ny from the image buf0 of size Nx_ini x Ny_ini, centered at
+// X0,Y0 coordinates. Also subtract bias value. Save to image.
+// Can only be used in finetune mode, and when no rebinning is used.
+{	
+	
+	for (int ix=0; ix<Nx; ix++)
+	{
+		int ix_ini = ix + X0 - Nx/2;
+		for (int iy=0; iy<Ny; iy++)
+		{
+			int iy_ini = iy + Y0 - Ny/2;
+			
+			if (ix_ini>=0 && ix_ini<Nx_ini && iy_ini>=0 && iy_ini<Ny_ini)
+				image[ix*Ny+iy] = buf0[ix_ini*Ny_ini+iy_ini] - bias;
+			else
+				image[ix*Ny+iy] = MASK0;
+			
+		}
+	}
+	
 	return;
 }
 

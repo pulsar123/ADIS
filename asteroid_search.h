@@ -11,7 +11,6 @@
   #define ASTEROID_SEARCH_H
   #include "cuda_errors.h"
 
-
 //#define TEST
 
 #define PI 3.14159265358979323846
@@ -76,7 +75,11 @@ void Is_GPU_present();
 
 int timeval_subtract (double *result, struct timeval *x, struct timeval *y);
 
-__global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch, int Ix1, int Iy1, int Jx, int Jy, float MQ, float p_min, float *d_dt, float *d_test_image, List d_list, int save_image, unsigned int *d_Pixel_counter, int Nx, int Ny);
+double MJD_FITS (fitsfile *f0);
+
+__global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch, int Ix1, int Iy1, int Jx,
+	int Jy, float MQ, float p_min, float *d_dt, float *d_test_image, List d_list, int save_image, 
+	unsigned int *d_Pixel_counter, int Nx, int Ny, int crop, int *d_dx_fixed, int *d_dy_fixed);
 
 __global__ void subtract_master_image (float **d_image, int N_images, size_t pitch, int Ix1, int Iy1, float *master_image, int Nx, int Ny);
 
@@ -95,15 +98,19 @@ __global__ void find_neighbours(int N_members, int N_cloud, unsigned int Pixel_c
 __global__ void find_maximum (int step, int N, float *vec, int *index, int *d_cloud, float *vec_out, int *index_out, int N_cloud, int *d_members);
 
 void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *Cluster_index, 
-	Cloud *cloud, float sgm, float MQ, int finetune, int rebin, int d_rebin);
+	Cloud *cloud, float sgm, float MQ, int finetune, int rebin, int d_rebin, int X00, int Y00);
 
 void save_cloud_fits (int Nx_ini, int Ny_ini, int Nx, int Ny, int Nc, float *img, const char *name,
- const char *name0, Cloud *cloud, int i_cloud, float sgm, int rebin, int d_rebin);
+ const char *name0, Cloud *cloud, int i_cloud, float sgm, int rebin, int d_rebin, double bias,
+ int crop, int X00, int Y00);
 
 __global__ void erase_image (float *image, size_t pitch, int Nx, int Ny, double bias);
 
 void create_mosaic (int Nx, int Ny, List list, unsigned int Pixel_counter, int *Cluster_index, int NCmax, const char *name0, Cloud *cloud);
 
 __global__ void compute_histogram (List d_list, unsigned int Pixel_counter, float p_min, float del_sgm, int *d_hist);
+
+void cropping(float *buf0, int Nx_ini, int Ny_ini, int Nx, int Ny, double bias, int X0, int Y0,
+ float *image);
 
 #endif

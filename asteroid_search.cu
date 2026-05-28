@@ -19,12 +19,12 @@ int main(int argc, char **argv)
     long naxes[2];
 	long Npix, Npix_ini;
 	int Nx, Ny, Nx0, Ny0, Nx_ini, Ny_ini;
+	int X00 = 0;
+	int Y00 = 0;
 	float *buf0; // host
 	size_t pitch;
-	char date_obs[30];
 	double mjd, mjd0;
-	int year, month, day, hour, minute;
-    double second, exposure;	
+	double mjd_last = 0.0;
 	float p_min;
 	char name0[100];
 
@@ -40,12 +40,14 @@ int main(int argc, char **argv)
 		printf(" -Step value        : the mesh step for motion vector lengths (in FWHM units)\n");
 		printf(" image1  ...        : list of B&W input FITS images (preprocessed with reconv)\n");
 		printf("\n Optional arguments [default value]:\n\n");
+		printf(" -crop              : (only during finetune) autocrop all images to reduce GPU memory use\n");
 		printf(" -finetune x y Jx Jy: do finetuning search for one cluster described by the 4D coords (pixels)\n");
 //		printf(" -list file         : instead of motion object detection, use the list generated in a prior detection run\n");
 		printf(" -N_cloud value     : maximum number of cloud fits files to save [10]\n");
 		printf(" -N_noise value     : parameter used during the histogram step (in std units) [10]\n");
 		printf(" -rebin value       : image rebinning factor for x and y, in pixels [1]\n");
 		printf(" -RMIN value        : shortest motion vector (in FWHM units) [1]\n");
+		printf("\n RMAX=0 means the longest motion vector is determined by the narrow side of the image.\n");
 		printf("\n In the finetune mode, the meaning of RMIN and RMAX changes:\n");
 		printf(" RMIN: ignored\n");
 		printf(" RMAX: largest distance from the cloud in (Jx,Jy) coordinates, using FWHM units\n");
@@ -62,6 +64,7 @@ int main(int argc, char **argv)
 	int Center_pix[4];
 	int finetune = 0;
 	int rebin = 1;
+	int crop = 0;
 	
 	int N_obligatory = 2; // Number of obligatory arguments
 	int j = 1; // j counts all arguments
@@ -81,7 +84,7 @@ int main(int argc, char **argv)
 				break;
 			}
 			RMAXf = atof(argv[j]);
-			assert(RMAXf > 0);
+			assert(RMAXf >= 0);
 			iob++;
 		}
 		
@@ -101,6 +104,12 @@ int main(int argc, char **argv)
 		
 		// Optional switches:
 		
+		if (strcmp(argv[j],"-crop") == 0)
+		{
+			j0++;
+			crop = 1;
+		}		
+
 		if (strcmp(argv[j],"-finetune") == 0)
 		{
 			j0 = j0 + 5;
@@ -187,12 +196,16 @@ int main(int argc, char **argv)
 		printf("\nThere should be at least 2 images in the stack. Exiting\n\n");
 		exit(1);
 	}
-	
-	// Now j0 points to the first image name argument
-
-	// Switching from FWHM to MQ=FWHM*Step units
-	int RMIN = (int)(RMINf/Step + 0.5);
-	int RMAX = (int)(RMAXf/Step + 0.5);
+	if (crop && !finetune)
+	{
+		printf("\n-crop is only supported in -finetune mode; ignoring -crop.\n");
+		crop = 0;
+	}
+	if (crop && rebin>1)
+	{
+		printf("\n-rebin is not supported in -crop mode; ignoring -rebin.\n");
+		rebin = 1;
+	}
 	
 	// Offsets (used when converting rebinned image pixel coordinates to non-rebin pixels image)
 	int d_rebin = (rebin - 1) / 2;	
@@ -227,25 +240,45 @@ int main(int argc, char **argv)
 	cudaMalloc(&d_list.Jx, MAX_PIXELS*sizeof(int));
 	cudaMalloc(&d_list.Jy, MAX_PIXELS*sizeof(int));
 	cudaMalloc(&d_list.p, MAX_PIXELS*sizeof(float));	
-	
 	float **h_image = NULL;
 	h_image = (float **)malloc(N_images*sizeof(float*));
 	float **d_image = NULL;
 	ERR( cudaMalloc(&d_image, N_images*sizeof(float*)) )
-
 	float *h_image1 = NULL;
 	float *h_dt = NULL;
-	
 	ERR( cudaMallocHost(&h_dt, N_images*sizeof(float*)) )
-	
 	float *d_dt = NULL;
 	ERR( cudaMalloc(&d_dt, N_images*sizeof(float*)) )
+	int *h_dx_fixed = NULL;
+	ERR( cudaMallocHost(&h_dx_fixed, N_images*sizeof(int*)) )
+	int *d_dx_fixed = NULL;
+	ERR( cudaMalloc(&d_dx_fixed, N_images*sizeof(int*)) )
+	int *h_dy_fixed = NULL;
+	ERR( cudaMallocHost(&h_dy_fixed, N_images*sizeof(int*)) )
+	int *d_dy_fixed = NULL;
+	ERR( cudaMalloc(&d_dy_fixed, N_images*sizeof(int*)) )
 	
 	gettimeofday (&tdr2, NULL); 
 
 	double bias = 0.0;
 	float FWHM;
 	printf("\n");
+
+	fitsfile *f0;
+	char *file0;
+	
+	// In crop mode, we need to read the last image first, to know the total time interval
+	// for the image sequence.
+	if (crop)
+	{
+		file0 = argv[argc-1];
+		fits_open_file(&f0, file0, READONLY, &status);
+		fits_error(status);
+		mjd_last = MJD_FITS(f0);
+		fits_close_file(f0, &status);		
+		fits_error(status);
+	}
+	
 	
 	// Reading input FITS images one by one, using cudaMemcpyAsync to do concurrent copying to the GPU
 	for (int i_image=0; i_image<N_images; i_image++)
@@ -253,8 +286,7 @@ int main(int argc, char **argv)
 		if (i_image == 0)
 			sprintf(name0,"%s",argv[j0]);
 		// Reading the next input FITS file
-		fitsfile *f0;
-		char *file0 = argv[j0+i_image];
+		file0 = argv[j0+i_image];
 		fits_open_file(&f0, file0, READONLY, &status);
 		fits_error(status);
 		
@@ -266,15 +298,10 @@ int main(int argc, char **argv)
 		}
 		
 #ifndef TEST
-		// Computing time offsets from the first image:
-		fits_read_key(f0, TSTRING, "DATE-OBS", date_obs, NULL, &status);
-		fits_read_key(f0, TDOUBLE, "EXPTIME", &exposure, NULL, &status);
-		fits_str2time(date_obs, &year, &month, &day,
-                  &hour, &minute, &second, &status);
-		if (status) { fits_report_error(stderr, status); return status; }
-		mjd = exposure/2.0/86400 + date2mjd (year, month, day) + ((second/60.0+minute)/60.0+hour)/24.0; // Modified Julian Date (UT) of the middle of exposure
+		mjd = MJD_FITS(f0);
 		if (i_image == 0)
 			mjd0 = mjd;
+		// Computing time offsets from the first image:
 		h_dt[i_image] = mjd - mjd0; //  in days
 //		printf("DATE-OBS: %s : %lf\n", date_obs, h_dt[i_image]);
 #endif		
@@ -296,17 +323,33 @@ int main(int argc, char **argv)
 		Nx = (Nx_ini+rebin-1)/rebin;
 		Ny = (Ny_ini+rebin-1)/rebin;
 		Npix_ini = (long)Nx_ini * Ny_ini;
+
+		// Optional cropping, only in finetune mode, and only when no rebinning is done
+		if (crop)
+		{
+			// The last image will have the largest number of its pixels used,
+			// so we use it to estimate the cropped image size to be used for
+			// all the images
+			// Rough guess (in pixels):
+			int Size = 2*(RMINf+RMAXf)*FWHM;
+			// Number of base tiles (including a potentially incomplete one),
+			// ading one more for interpolation effects
+			int Ntiles = (Size+NB-1) / NB + 1;
+			Nx = NB * Ntiles;
+			Ny = Nx;
+		}
+
 		Npix = (long)Nx * Ny;
 		if (i_image == 0)
 		{
-			Nx0 = Nx;
-			Ny0 = Ny;
+			Nx0 = Nx_ini;
+			Ny0 = Ny_ini;
 			buf0 = (float *)malloc(sizeof(float) * Npix_ini);
 			ERR( cudaMallocHost(&h_image1, sizeof(float)*Npix) )
 		}
 		else
 		{
-			if (Nx != Nx0 || Ny != Ny0)
+			if (Nx_ini != Nx0 || Ny_ini != Ny0)
 			{
 				fprintf(stderr, "\nError: mismatching input images\n");
 				exit(1);
@@ -317,8 +360,27 @@ int main(int argc, char **argv)
 		fits_error(status);
 		fits_close_file(f0, &status);		
 		
-		// Subtracting bias from each image, and optional rebinning:
-		rebinning(buf0, Nx_ini, Ny_ini, Nx, Ny, bias, rebin, h_image1);
+		if (crop)
+		{
+			float dt = (mjd - mjd0) / (mjd_last - mjd0); // fractional time difference
+			// Fixed shift (integer values), in pixels:
+			h_dx_fixed[i_image] = (int)(dt * Center_pix[2] + 0.5);
+			h_dy_fixed[i_image] = (int)(dt * Center_pix[3] + 0.5);
+			int X0 = (int)(Center_pix[0] + dt * Center_pix[2] + 0.5);
+			int Y0 = (int)(Center_pix[1] + dt * Center_pix[3] + 0.5);
+			if (i_image == 0)
+			{
+				// Will be used for writing output fits files, and computing stats
+				X00 = X0;
+				Y00 = Y0;
+			}
+			
+			// Cropping and bias subtracting from buf0 -> h_image1
+			cropping(buf0, Nx_ini, Ny_ini, Nx, Ny, bias, X0, Y0, h_image1);
+		}
+		else
+			// Subtracting bias from each image, and optional rebinning:
+			rebinning(buf0, Nx_ini, Ny_ini, Nx, Ny, bias, rebin, h_image1);
 		
 		// x is for the rows, y is for columns
 		// This is the host-device sync point
@@ -376,13 +438,30 @@ int main(int argc, char **argv)
 
 	ERR( cudaMemcpy(d_dt, h_dt, N_images*sizeof(float), cudaMemcpyHostToDevice) )
 	ERR( cudaMemcpy(d_image, h_image, N_images*sizeof(float*), cudaMemcpyHostToDevice) )
+	if (crop)
+	{
+		ERR( cudaMemcpy(d_dx_fixed, h_dx_fixed, N_images*sizeof(int), cudaMemcpyHostToDevice) )
+		ERR( cudaMemcpy(d_dy_fixed, h_dy_fixed, N_images*sizeof(int), cudaMemcpyHostToDevice) )
+	}
 	
 	// Number of base tiles along both axes (no incomplete tiles are allowed):
 	int Nxb = Nx/NB;
 	int Nyb = Ny/NB;
 	// Base tile (Ixb,Iyb) covers this range of pixels (inclusive): ix=NB*Ixb..NB*(Ixb+1)-1, iy=NB*Iyb..NB*(Iyb+1)-1 
 	
+	// The special meaning of RMAXf=0 input parameter: motion vectors are limited by the more narrow side
+	// of the image
+	if (RMAXf == 0)
+	{
+		int Side = min(Nx_ini, Ny_ini);
+		RMAXf = Side / FWHM;
+		printf("\nLimiting the search to RMAX=%f in FWHM units\n", RMAXf);
+	}
 	
+	// Switching from FWHM to MQ=FWHM*Step units
+	int RMIN = (int)(RMINf/Step + 0.5);
+	int RMAX = (int)(RMAXf/Step + 0.5);
+		
 	if (finetune == 0)
 	{
 		// RMAX is limited by the image diagonal length (distance between the farthest tiles):
@@ -392,10 +471,6 @@ int main(int argc, char **argv)
 			RMAX = diag;
 			printf("\nLimiting the search to RMAX=%f in FWHM units\n", RMAX*Step);
 		}
-		if (RMAX < 0)
-			RMAX = 0;
-		if (RMIN < 0)
-			RMIN = 0;
 	}
 	
 	float *d_test_image = NULL;
@@ -409,9 +484,6 @@ int main(int argc, char **argv)
 	unsigned int h_Pixel_counter = 0;
 	cudaMemcpy(d_Pixel_counter, &h_Pixel_counter, sizeof(unsigned int), cudaMemcpyHostToDevice);
 	
-	cudaMemGetInfo(&free_mem, &total_mem);
-//	printf("GPU memory: Free: %f GB, Total: %f GB\n\n", (float)free_mem/(1024*1024*1024), (float)total_mem/(1024*1024*1024));
-
 	dim3 Block_size(32,32);
 	// Used for image erase
 	dim3 Grid_size2 = {(Nx+Block_size.x-1)/Block_size.x, (Ny+Block_size.y-1)/Block_size.y};	
@@ -423,7 +495,8 @@ int main(int argc, char **argv)
 	p_min = 1e30;
 	erase_image <<<Grid_size2, Block_size>>> (d_test_image, pitch, Nx, Ny, 0.0);
 	// Zero-offset stacking:
-	motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,0,0,MQ,p_min,d_dt,d_test_image,d_list,1,d_Pixel_counter,Nx,Ny);
+	motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,0,0,MQ,p_min,d_dt,
+		d_test_image,d_list,1,d_Pixel_counter,Nx,Ny,crop,d_dx_fixed,d_dy_fixed);
 	ERR( cudaMemcpy2D(h_test_image, Ny*sizeof(float), d_test_image, pitch, Ny*sizeof(float), Nx, cudaMemcpyDeviceToHost) )		
 	double p0, sgm;
 	long Npix2;
@@ -438,7 +511,7 @@ int main(int argc, char **argv)
 	
 	// Testing NVECTORS motion_search vectors in the RMIN..RMAX range, computing the cumulative histogram of bright pixels,
 	// which we use to place p_min threshold
-	float delta_p = 3.0; // Initial offset when computing the histogram, in sgm units
+	float delta_p = 2.0; // Initial offset when computing the histogram, in sgm units
 	p_min = p0 + delta_p*sgm;  // Initial guess for p_min
 	h_Pixel_counter = 0;
 	cudaMemcpy(d_Pixel_counter, &h_Pixel_counter, sizeof(unsigned int), cudaMemcpyHostToDevice);
@@ -481,7 +554,7 @@ int main(int argc, char **argv)
 		
 		find_kernel_parameters(Jx, Jy, MQ, Nx, Ny, &Grid_size, &Ix1, &Iy1);
 		motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,Jx,Jy,MQ,p_min,
-		   d_dt,d_test_image,d_list,0,d_Pixel_counter,Nx,Ny);		
+		   d_dt,d_test_image,d_list,0,d_Pixel_counter,Nx,Ny,crop,d_dx_fixed,d_dy_fixed);		
 		
 		iv++;
 	}
@@ -543,7 +616,7 @@ int main(int argc, char **argv)
 	// for NVECTORS random motion vectors.
 	p_min = p_min + del_sgm*(bin+1);
 
-	printf("\nHistogram: p_min=%f, offset=%f std\n\n", p_min, delta_p+(bin+1)*DEL_SGM);
+	printf("\nHistogram: p_min=%e, offset=%f std\n\n", p_min, delta_p+(bin+1)*DEL_SGM);
 	
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++	
 
@@ -593,7 +666,8 @@ int main(int argc, char **argv)
 				// The main compute kernel: searches for moving objects over all images,
 				// all allowed base image tiles, for the given motion vector (Jx,Jy) in MQ units
 				// Using the maximum 1024 threads per block, to cover 32x32 pixel tiles
-				motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,Jx,Jy,MQ,p_min,d_dt,d_test_image,d_list,0,d_Pixel_counter,Nx,Ny);
+				motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,Jx,Jy,MQ,
+					p_min,d_dt,d_test_image,d_list,0,d_Pixel_counter,Nx,Ny,crop,d_dx_fixed,d_dy_fixed);
 				
 				Jcount++;
 				if (Jcount % 10000 == 0)
@@ -640,8 +714,8 @@ int main(int argc, char **argv)
 				}
 			}
 			printf("Motion vector for the brightest pixel: (%8.2f, %8.2f); pixel coords: (%d, %d); p=%f (%f std)\n",
-			rebin*MQ*h_list.Jx[imax], rebin*MQ*h_list.Jy[imax], rebin*h_list.ix[imax]+d_rebin, 
-			rebin*h_list.iy[imax]+d_rebin, h_list.p[imax],
+			rebin*MQ*h_list.Jx[imax], rebin*MQ*h_list.Jy[imax], rebin*h_list.ix[imax]+d_rebin+X00, 
+			rebin*h_list.iy[imax]+d_rebin+Y00, h_list.p[imax],
 			h_list.p[imax]/sgm);
 			
 			int *Cluster_index = (int *)malloc(h_Pixel_counter*sizeof(int));			
@@ -674,8 +748,8 @@ int main(int argc, char **argv)
 			{
 				// Jx, Jy are converted to the original (non-rebinned) pixels:
 				fprintf(fp, "%d %f %f %d %d %11e %d\n", i, rebin*MQ*h_list.Jx[i], rebin*MQ*h_list.Jy[i],
-				rebin*h_list.ix[i]+d_rebin,
-				rebin*h_list.iy[i]+d_rebin, h_list.p[i]/sgm, Cluster_index[i]);
+				rebin*h_list.ix[i]+d_rebin+X00,
+				rebin*h_list.iy[i]+d_rebin+Y00, h_list.p[i]/sgm, Cluster_index[i]);
 			}
 			fclose(fp);
 
@@ -689,7 +763,7 @@ int main(int argc, char **argv)
 
 			// Computing stats for the N_cloud brightest clouds			
 			cloud_stats(h_list, h_Pixel_counter, N_cloud, Cluster_index, cloud, sgm, MQ, finetune,
-				rebin, d_rebin);
+				rebin, d_rebin, X00, Y00);
 
 // 			Not sure how useful the mosaic is
 //			create_mosaic(Nx, Ny, h_list, h_Pixel_counter, Cluster_index, NC, name0, cloud);
@@ -710,14 +784,14 @@ int main(int argc, char **argv)
 				erase_image <<<Grid_size2, Block_size>>> (d_test_image, pitch, Nx, Ny, 0.0);
 
 				motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,
-				Jx,Jy,MQ,p_min,d_dt,d_test_image,d_list,1,d_Pixel_counter,Nx,Ny);
+				Jx,Jy,MQ,p_min,d_dt,d_test_image,d_list,1,d_Pixel_counter,Nx,Ny,crop,d_dx_fixed,d_dy_fixed);
 				
 				ERR( cudaMemcpy2D(h_test_image, Ny*sizeof(float), d_test_image, pitch, Ny*sizeof(float), Nx, cudaMemcpyDeviceToHost) )
 				cudaDeviceSynchronize();
 				sprintf(fits_name,"cloud_%03d.fit", icloud);
 				
 				save_cloud_fits(Nx_ini, Ny_ini, Nx, Ny, 1, h_test_image, fits_name, name0, cloud, icloud,
-					sgm, rebin, d_rebin);
+					sgm, rebin, d_rebin, bias, crop, X00, Y00);
 			}
 			free(Cluster_index);
 	
