@@ -642,7 +642,6 @@ void sigma_clipping(float *image, long plane_pixels, double Nsigma, double *p0, 
 		
 		long Npixels = Nx*Ny;
 		
-//		float *img1 = my_alloc_real();
 		float *img1 = (float *)malloc(Npixels*sizeof(float));
 		
 		
@@ -661,8 +660,6 @@ void sigma_clipping(float *image, long plane_pixels, double Nsigma, double *p0, 
 		fits_create_file(&fk, name, &status);
 		fits_error(status);
 		
-		
-		
 		long nelem1  = (long)Nx * Ny * Nc;
 //		long naxes[3] = {Ny, Nx, Nc};
 //		fits_create_img(fk, FLOAT_IMG, 3, naxes, &status);
@@ -678,7 +675,6 @@ void sigma_clipping(float *image, long plane_pixels, double Nsigma, double *p0, 
 		fits_error(status);
 		fits_close_file(fk, &status);		
 		
-//		my_free_real(img1);
 		free(img1);
 		
 		return;
@@ -1051,6 +1047,20 @@ void grow_masked_stars(float *img, int Nx, int Ny, float mask_sgm, int *N_exclud
 	
 	my_free_real(mask);
 }
+/* ------------------------------------------------ */
+
+void string_is_a_float (const char *str)
+{
+	int len;
+	float ignore;
+	int ret = sscanf(str, "%f %n", &ignore, &len);
+	if (!(ret==1 && !str[len]))
+	{
+		printf("\nInput parameter %s is not a number!\n\n", str);
+		exit(1);
+	}
+}
+
 
 /* ------------------------------------------------ */
 

@@ -129,6 +129,7 @@ int main(int argc, char **argv)
 				error = j-1;
 				break;
 			}
+			string_is_a_float(argv[j]);
 			R = atof(argv[j]);
 			iob++;
 			assert(R>0);
@@ -144,6 +145,7 @@ int main(int argc, char **argv)
 				error = j-1;
 				break;
 			}
+			string_is_a_float(argv[j]);
 			FWHM = atof(argv[j]);
 			iob++;
 			assert(FWHM>0);
@@ -161,6 +163,7 @@ int main(int argc, char **argv)
 				error = j-1;
 				break;
 			}
+			string_is_a_float(argv[j]);
 			NTx = atoi(argv[j]);
 			assert(NTx>0);
 		}
@@ -176,6 +179,7 @@ int main(int argc, char **argv)
 				error = j-1;
 				break;
 			}
+			string_is_a_float(argv[j]);
 			outbias = atof(argv[j]);
 			assert(outbias>=0.0 && outbias<=1.0);
 		}
@@ -211,6 +215,7 @@ int main(int argc, char **argv)
 				error = j-1;
 				break;
 			}
+			string_is_a_float(argv[j]);
 			border_width = atof(argv[j]);
 			mask_borders = 1;
 			assert(border_width>0);
@@ -234,6 +239,7 @@ int main(int argc, char **argv)
 				error = j-1;
 				break;
 			}
+			string_is_a_float(argv[j]);
 			bmax = atof(argv[j]);
 			mask = 1;
 			assert(bmax>0);
@@ -249,6 +255,7 @@ int main(int argc, char **argv)
 				error = j-1;
 				break;
 			}
+			string_is_a_float(argv[j]);
 			mask_sgm = atof(argv[j]);
 			grow_mask = 1;
 			assert(mask_sgm>0);
@@ -264,6 +271,7 @@ int main(int argc, char **argv)
 				error = j-1;
 				break;
 			}
+			string_is_a_float(argv[j]);
 			hot_pixels_std = atof(argv[j]);
 			hot_pixels = 1;
 			assert(hot_pixels_std>0);

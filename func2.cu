@@ -36,7 +36,7 @@ double MJD_FITS (fitsfile *f0)
 	char date_obs[30];
 	int year, month, day, hour, minute;
     double second, exposure;	
-	int status;
+	int status = 0;
 		
 	fits_read_key(f0, TSTRING, "DATE-OBS", date_obs, NULL, &status);
 	fits_error(status);
@@ -54,29 +54,22 @@ double MJD_FITS (fitsfile *f0)
 	return mjd;
 }	
 
-/* ------------------------------------------------ */
-/*
-void fits_error(int status)
-{
-    if (status) {
-        fits_report_error(stderr, status);
-        exit(EXIT_FAILURE);
-    }
-}
-*/
-
-
 	
 /* ------------------------------------------------ */
 	
 __global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch, int Ix1, int Iy1, int Jx,
 	int Jy, float MQ, float p_min, float *d_dt, float *d_test_image, List d_list, int save_image,
-	unsigned int *d_Pixel_counter, int Nx, int Ny, int crop, int *d_dx_fixed, int *d_dy_fixed)
+	unsigned int *d_Pixel_counter, int Nx, int Ny, int crop, int *d_dx_offset, int *d_dy_offset)
 {
 	// The main compute kernel: searches for moving objects over all images,
 	// all allowed base image tiles, for the given motion vector (Jx,Jy) in MQ units
 	// Using the maximum 1024 threads per block, to cover 32x32 pixel tiles
 	// Each kernel performs one full image stacking, over all base tiles.
+	
+	// In crop mode, we pretend that we are still dealing with full resolution images, only when
+	// reading from /writing to image arrays we convert to local (cropped) indexes using the per-image
+	// offsets dx_offset, dy_offset. Input parameters Nx, Ny, and pitch correspond to cropped images.
+	// Base tile indexes (Ix1, Iy1) and motion vectors (Jx, Jy) correspond to a full resolution image.
 	
 	__shared__ float base_tile[NB][NB];  // Keeps the base tile pixels
 	__shared__ float image_tile[NB+1][NB+2]; // Keeps tiles of all the rest of images; +1 columns to avoid bank conflicts (last column will not be used)
@@ -91,28 +84,21 @@ __global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch,
 	int jy = threadIdx.x; // Fastest changing index
 
 	// Base image pixel coordinates:
+	// Full resolution, even in crop mode
 	int ix = jx + NB*Ixb;
 	int iy = jy + NB*Iyb;  // Fastest changing index
-	
+
 	int counter = 0;
 		
 	// Loping over all images sequentially:
 	for (int i=0; i<N_images; i++)
 	{
+	
 		float dx, dy;
 		// Motion vector for the image i in pixels:
-		if (crop)
-		{
-			// In the crop mode, we subtract the fixed shifts from each motion vector,
-			// and now dx,dy is the residual motion vector.
-			dx = d_dt[i] * Jx*MQ - d_dx_fixed[i];
-			dy = d_dt[i] * Jy*MQ - d_dy_fixed[i];
-		}
-		else
-		{
-			dx = d_dt[i] * Jx*MQ;
-			dy = d_dt[i] * Jy*MQ;
-		}
+		dx = d_dt[i] * Jx*MQ;
+		dy = d_dt[i] * Jy*MQ;
+
 		// Pixel coordinates of the base transposed pixel:
 		int ix0 = ix + floor(dx);
 		int iy0 = iy + floor(dy); // Fastest changing index
@@ -124,10 +110,21 @@ __global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch,
 		{
 			// Base 31x31 tile initialization
 			// For the base tile only, skipping the last column and last row, because there is no interpolation:
-			if (ix>=0 && ix<Nx && iy>=0 && iy<Ny)
+			int ixt, iyt;
+			if (crop)
 			{
-				float *row = (float *)((char*)d_image[i] + ix * pitch);
-				float p = row[iy];  // Coalesced read
+				ixt = ix - d_dx_offset[0];
+				iyt = iy - d_dy_offset[0];
+			}
+			else
+			{
+				ixt = ix;
+				iyt = iy;
+			}
+			if (ixt>=0 && ixt<Nx && iyt>=0 && iyt<Ny)
+			{
+				float *row = (float *)((char*)d_image[i] + ixt * pitch);
+				float p = row[iyt];  // Coalesced read
 				if (p > MASK)
 				{
 					base_tile[jx][jy] = p;
@@ -141,12 +138,25 @@ __global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch,
 		if (i > 0)
 		// 32x32 image_tile initialization
 		{
-			// Pointer to the start of the image's row:
-			if (ix0>=0 && ix0<Nx && iy0>=0 && iy0<Ny)
+			int ixt, iyt;
+			if (crop)
 			{
-				float *row = (float *)((char*)d_image[i] + ix0 * pitch);
-				image_tile[jx][jy] = row[iy0]; // Coalesced read
+				ixt = ix0 - d_dx_offset[i];
+				iyt = iy0 - d_dy_offset[i];
 			}
+			else
+			{
+				ixt = ix0;
+				iyt = iy0;
+			}
+			// Pointer to the start of the image's row:
+			if (ixt>=0 && ixt<Nx && iyt>=0 && iyt<Ny)
+			{
+				float *row = (float *)((char*)d_image[i] + ixt * pitch);
+				image_tile[jx][jy] = row[iyt]; // Coalesced read
+			}
+			else
+				image_tile[jx][jy] = MASK0;
 		}
 		
 		__syncthreads(); // Required because of the tile initialization by all threads ^^
@@ -194,6 +204,11 @@ __global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch,
 	if (save_image)
 		if (threadIdx.x<NB && threadIdx.y<NB)
 		{
+			if (crop)
+			{
+				ix = ix - d_dx_offset[0];
+				iy = iy - d_dy_offset[0];
+			}
 			float *row = (float *)((char*)d_test_image + ix * pitch);
 			row[iy] = base_tile[jx][jy]; // Coalesced write
 		}
@@ -259,8 +274,25 @@ __global__ void subtract_master_image (float **d_image, int N_images, size_t pit
 
 
 	
-void find_kernel_parameters(int Jx, int Jy, float MQ, int Nx, int Ny, dim3 *Grid_size, int *Ix1, int *Iy1)
+void find_kernel_parameters(int Jx, int Jy, float MQ, int Nx, int Ny, dim3 *Grid_size, int *Ix1, int *Iy1, int crop, int X0, int Y0)
 {
+	// In crop mode,we always use the same base tiles, regardless of the motion vector
+	// The cropped box spans these ranges of native base image pixels:
+	// h_dx_offset[0]...h_dx_offset[0]+Nx-1
+	// h_dy_offset[0]...h_dy_offset[0]+Ny-1
+	// Convert these to the native base tile indexes by /NB
+	if (crop)
+	{
+		// Starting tile indexes (could be partial):
+		*Ix1 = X0 / NB;
+		*Iy1 = Y0 / NB;
+		// Ending tile indexes (could be partial):
+		int Ix2 = (X0+Nx-1) / NB;
+		int Iy2 = (Y0+Ny-1) / NB;
+		// Number of tiles along each dimension:
+		*Grid_size = dim3(Ix2-*Ix1+1,Iy2-*Iy1+1);
+		return;
+	}
 				
 	// Motion vector in pixels:
 	float jx = Jx*MQ;
@@ -707,7 +739,7 @@ __global__ void find_neighbours(int N_members, int N_cloud, unsigned int Pixel_c
 /* ------------------------------------------------ */
 
 void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *Cluster_index,
- Cloud *cloud, float sgm, float MQ, int finetune, int rebin, int d_rebin, int X00, int Y00)
+ Cloud *cloud, float sgm, float MQ, int finetune, int rebin, int d_rebin, float p_min)
 // Computing basic stats for the brightest clouds
 {
 	int NC;
@@ -795,10 +827,13 @@ void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *C
 		// Switching to original (before rebinning) pixel size:
 		float rad_xy = rebin*MQ*sqrt(pow((ix_max-ix_min)/2.0,2) + pow((ix_max-ix_min)/2.0,2));
 		float rad_J = rebin*MQ*sqrt(pow((Jx_max-Jx_min)/2.0,2) + pow((Jx_max-Jx_min)/2.0,2));
-		fprintf(fp, "%4d %11e %4d %4d %8.2f %8.2f %7d %11e %8.2f %8.2f\n", icloud, pmax/sgm,
-		rebin*h_list.ix[imax]+d_rebin+X00,
-		rebin*h_list.iy[imax]+d_rebin+Y00,
-		rebin*MQ*h_list.Jx[imax], rebin*MQ*h_list.Jy[imax], N, mass, rad_xy, rad_J);
+		fprintf(fp, "%4d %11e %4d %4d %8.2f %8.2f %11e %7d %11e %8.2f %8.2f\n", 
+		icloud, pmax/sgm,
+		rebin*h_list.ix[imax]+d_rebin,
+		rebin*h_list.iy[imax]+d_rebin,
+		rebin*MQ*h_list.Jx[imax], rebin*MQ*h_list.Jy[imax],
+		p_min,
+		N, mass, rad_xy, rad_J);
 	}
 	
 	fclose(fp);
@@ -814,6 +849,8 @@ void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *C
 	{
 		char buffer[100];
 		int status=0; 
+		
+		float masked_value = bias - 4*sgm;
 		
 		// The file will be using the native (unbinned) resolution:
 		long Npix_ini = Nx_ini*Ny_ini;		
@@ -840,7 +877,7 @@ void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *C
 								if (img[ix*Ny+iy] > MASK)
 									img1[ix_ini*Ny_ini+iy_ini] = img[ix*Ny+iy] + bias;
 								else
-									img1[ix_ini*Ny_ini+iy_ini] = bias - 4*sgm;  // Making masked areas darker
+									img1[ix_ini*Ny_ini+iy_ini] = masked_value;  // Making masked areas darker
 							}
 						}
 					}
@@ -852,20 +889,20 @@ void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *C
 		if (crop)
 		{
 			for (int i=0; i < Npix_ini; i++)
-				img1[i] = MASK0;
+				img1[i] = masked_value;
 
 			for (int ix=0; ix<Nx; ix++)
 			{
-				int ix_ini = ix + X00 - Nx/2;
+				int ix_ini = ix + X00;
 				for (int iy=0; iy<Ny; iy++)
 				{
-					int iy_ini = iy + Y00 - Ny/2;
+					int iy_ini = iy + Y00;
 					
 					if (ix_ini>=0 && ix_ini<Nx_ini && iy_ini>=0 && iy_ini<Ny_ini)
 						if (img[ix*Ny+iy] > MASK)
 							img1[ix_ini*Ny_ini+iy_ini] = img[ix*Ny+iy] + bias;
 						else
-							img1[ix_ini*Ny_ini+iy_ini] = bias - 4*sgm;	
+							img1[ix_ini*Ny_ini+iy_ini] = masked_value;	
 				}
 			}
 			
@@ -878,7 +915,7 @@ void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *C
 				if (img[i] > MASK)
 					img1[i] = img[i] + bias;
 				else
-					img1[i] = bias - 4*sgm;  // Making masked areas darker
+					img1[i] = masked_value;  // Making masked areas darker
 			}
 		}
 	}
@@ -1071,21 +1108,28 @@ __global__ void compute_histogram (List d_list, unsigned int Pixel_counter, floa
 
 void cropping(float *buf0, int Nx_ini, int Ny_ini, int Nx, int Ny, double bias, int X0, int Y0,
  float *image)
-// Crop an image of size Nx x Ny from the image buf0 of size Nx_ini x Ny_ini, centered at
-// X0,Y0 coordinates. Also subtract bias value. Save to image.
+// Crop an image of size Nx x Ny from the image buf0 of size Nx_ini x Ny_ini, with
+// X0,Y0 shift. Also subtract bias value. Save to image.
 // Can only be used in finetune mode, and when no rebinning is used.
 {	
 	
 	for (int ix=0; ix<Nx; ix++)
 	{
-		int ix_ini = ix + X0 - Nx/2;
+		int ix_ini = ix + X0;
 		for (int iy=0; iy<Ny; iy++)
 		{
-			int iy_ini = iy + Y0 - Ny/2;
+			int iy_ini = iy + Y0;
 			
 			if (ix_ini>=0 && ix_ini<Nx_ini && iy_ini>=0 && iy_ini<Ny_ini)
-				image[ix*Ny+iy] = buf0[ix_ini*Ny_ini+iy_ini] - bias;
+			{
+				float p = buf0[ix_ini*Ny_ini+iy_ini];
+				if (p > MASK )
+					image[ix*Ny+iy] = p - bias;
+				else
+					image[ix*Ny+iy] = MASK0;
+			}
 			else
+				// Areas outside of the original image are masked:
 				image[ix*Ny+iy] = MASK0;
 			
 		}

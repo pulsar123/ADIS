@@ -111,6 +111,8 @@ void grow_masked_stars(float *img, int Nx, int Ny, float mask_sgm, int *N_exclud
 
 void erase_hot_pixels(float *img, int Nx, int Ny, float p_max);
 
+void string_is_a_float (const char *str);
+
 #ifdef __cplusplus
 }
 #endif

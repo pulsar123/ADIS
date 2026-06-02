@@ -79,11 +79,12 @@ double MJD_FITS (fitsfile *f0);
 
 __global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch, int Ix1, int Iy1, int Jx,
 	int Jy, float MQ, float p_min, float *d_dt, float *d_test_image, List d_list, int save_image, 
-	unsigned int *d_Pixel_counter, int Nx, int Ny, int crop, int *d_dx_fixed, int *d_dy_fixed);
+	unsigned int *d_Pixel_counter, int Nx, int Ny, int crop, int *d_dx_offset, int *d_dy_offset);
 
 __global__ void subtract_master_image (float **d_image, int N_images, size_t pitch, int Ix1, int Iy1, float *master_image, int Nx, int Ny);
 
-void find_kernel_parameters(int Jx, int Jy, float MQ, int Nx, int Ny, dim3 *Grid_size, int *Ix1, int *Iy1);
+void find_kernel_parameters(int Jx, int Jy, float MQ, int Nx, int Ny, dim3 *Grid_size, int *Ix1, int *Iy1,
+	int crop, int X0, int Y0);
 
 void cluster_analysis(List h_list, unsigned int Pixel_counter, int *Cluster_index, int *N_cloud);
 
@@ -98,7 +99,7 @@ __global__ void find_neighbours(int N_members, int N_cloud, unsigned int Pixel_c
 __global__ void find_maximum (int step, int N, float *vec, int *index, int *d_cloud, float *vec_out, int *index_out, int N_cloud, int *d_members);
 
 void cloud_stats (List h_list, unsigned int h_Pixel_counter, int N_cloud, int *Cluster_index, 
-	Cloud *cloud, float sgm, float MQ, int finetune, int rebin, int d_rebin, int X00, int Y00);
+	Cloud *cloud, float sgm, float MQ, int finetune, int rebin, int d_rebin, float p_min);
 
 void save_cloud_fits (int Nx_ini, int Ny_ini, int Nx, int Ny, int Nc, float *img, const char *name,
  const char *name0, Cloud *cloud, int i_cloud, float sgm, int rebin, int d_rebin, double bias,
