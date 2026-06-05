@@ -113,6 +113,7 @@ __global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch,
 			int ixt, iyt;
 			if (crop)
 			{
+				// Switching from full-res to cropped coordinates
 				ixt = ix - d_dx_offset[0];
 				iyt = iy - d_dy_offset[0];
 			}
@@ -206,11 +207,15 @@ __global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch,
 		{
 			if (crop)
 			{
+				// Switching from full-res to cropped coordinates
 				ix = ix - d_dx_offset[0];
 				iy = iy - d_dy_offset[0];
 			}
-			float *row = (float *)((char*)d_test_image + ix * pitch);
-			row[iy] = base_tile[jx][jy]; // Coalesced write
+			if (ix>=0 && ix<Nx && iy>=0 && iy<Ny)
+			{
+				float *row = (float *)((char*)d_test_image + ix * pitch);
+				row[iy] = base_tile[jx][jy]; // Coalesced write
+			}
 		}
 
 	return;

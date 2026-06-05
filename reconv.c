@@ -31,8 +31,8 @@ const int BUFFER_SIZE=1000;    // Make buffer size large enough for all print st
 
 int main(int argc, char **argv)
 {
-    struct timeval  tdr0, tdr1, tdr;
-    double restime;
+//    struct timeval  tdr0, tdr1, tdr;
+//    double restime;
 
 //+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++		
 	// Processing command line arguments
@@ -49,10 +49,12 @@ int main(int argc, char **argv)
 		printf(" -FWHM value       :  FWHM in pixels (measured from the master image) \n");
 		printf(" -R kernel_radius  :  kernel radius in FWHM units \n");
 		printf(" image1  ...       :  list of input FITS images (RGB only)\n");
+		
 		printf("\n Optional arguments [default value]:\n\n");
 		printf(" -bg value         :  number of vertical tiles for bilinear background subtraction [5]\n");
 		printf(" -bias value       :  bias for the output image [0]\n");
 		printf(" -border width     :  mask out the output image border, the width is in kernel_radius units [0]\n");
+		printf(" -delta_t value    :  apply this time correction in seconds to every image\n");
 		printf(" -grow_mask sgm    :  grow star masks using gaussian with sgm size (FWHM units)\n");
 		printf(" -hot_pixels value :  mask pixels this mant std above the floor\n");
 		printf(" -k image_name     :  output kernel image\n");

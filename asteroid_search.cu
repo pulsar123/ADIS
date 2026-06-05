@@ -25,7 +25,7 @@ int main(int argc, char **argv)
 	double mjd_last = 0.0;
 	float p_min;
 	char name0[100];
-
+	float dt_motion_search = 0;
 
 	// Processing command line arguments
 	
@@ -43,6 +43,7 @@ int main(int argc, char **argv)
 //		printf(" -list file         : instead of motion object detection, use the list generated in a prior detection run\n");
 		printf(" -N_cloud value     : maximum number of cloud fits files to save [10]\n");
 		printf(" -N_noise value     : parameter used during the histogram step (in std units) [10]\n");
+		printf(" -p_min value       : use this manual value of pixel brightness cutoff, instead of histogram\n");
 		printf(" -rebin value       : image rebinning factor for x and y, in pixels [1]\n");
 		printf(" -RMIN value        : shortest motion vector (in FWHM units) [1]\n");
 		printf("\n RMAX=0 means the longest motion vector is determined by the narrow side of the image.\n");
@@ -63,6 +64,8 @@ int main(int argc, char **argv)
 	int finetune = 0;
 	int rebin = 1;
 	int crop = 0;
+	float p_min0 = 0;
+	int no_histogram = 0;
 	
 	int N_obligatory = 2; // Number of obligatory arguments
 	int j = 1; // j counts all arguments
@@ -153,6 +156,21 @@ int main(int argc, char **argv)
 			string_is_a_float(argv[j]);
 			N_noise = atoi(argv[j]);
 			assert(N_noise > 0);
+		}		
+
+		if (strcmp(argv[j],"-p_min") == 0)
+		{
+			j++;
+			j0 = j0 + 2;
+			if (argv[j][0] == '-' || j>=argc)
+			{
+				error = j-1;
+				break;
+			}
+			string_is_a_float(argv[j]);
+			p_min0 = atoi(argv[j]);
+			assert(p_min0 > 0 && p_min0 < 1);
+			no_histogram = 1;
 		}		
 
 		if (strcmp(argv[j],"-rebin") == 0)
@@ -470,6 +488,8 @@ int main(int argc, char **argv)
 		R0 = sqrt(pow(Center_pix[2],2) + pow(Center_pix[3]/rebin,2)) / MQ;
 	}
 	
+	printf("\nTotal time interval: %f days\n", h_dt[N_images-1]);
+	
 #ifndef TEST
 	// Normalizing the time shift for the last image to 1:
 	for (int i=0; i<N_images; i++)
@@ -547,8 +567,10 @@ int main(int argc, char **argv)
 	p_min = 1e30;
 	erase_image <<<Grid_size2, Block_size>>> (d_test_image, pitch, Nx, Ny, MASK0);
 	// Zero-offset stacking:
+	ERR (cudaDeviceSynchronize())
 	motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,Jx,Jy,MQ,p_min,d_dt,
 		d_test_image,d_list,1,d_Pixel_counter,Nx,Ny,crop,d_dx_offset,d_dy_offset);
+	ERR (cudaDeviceSynchronize())
 	ERR( cudaMemcpy2D(h_test_image, Ny*sizeof(float), d_test_image, pitch, Ny*sizeof(float), Nx, cudaMemcpyDeviceToHost) )		
 	double p0, sgm;
 	long Npix2;
@@ -559,115 +581,125 @@ int main(int argc, char **argv)
 
 //++++++++++++++++++++++++++   Histogram step +++++++++++++++++++++++++++++++
 
-	printf("\nProcessing %d motion vectors to compute the histogram\n", NVECTORS);
-	
-	// Testing NVECTORS motion_search vectors in the RMIN..RMAX range, computing the cumulative histogram of bright pixels,
-	// which we use to place p_min threshold
-	float delta_p = 2.0; // Initial offset when computing the histogram, in sgm units
-	p_min = p0 + delta_p*sgm;  // Initial guess for p_min
-	h_Pixel_counter = 0;
-	cudaMemcpy(d_Pixel_counter, &h_Pixel_counter, sizeof(unsigned int), cudaMemcpyHostToDevice);
-	cudaDeviceSynchronize();
-    gettimeofday (&tdr0, NULL);  
-	float R, phi;
-	int iv = 0;
-	int iv0 = 0;
-	float R1, R2;
-	if (finetune)
+	if (no_histogram)	
 	{
-		// In finetune mode, we compute the histogram from the range of the motion vectors
-		// centered around the cloud center motion vector R0:
-		R1 = R0 - RMAX;
-		R2 = R0 + RMAX;
+		p_min = p_min0;  // Using the input value instead of doing histogram
 	}
+	
 	else
 	{
-		R1 = RMIN;
-		R2 = RMAX;
-	}
-	
-	do
-	{
-		iv0++;
+
+		printf("\nProcessing %d motion vectors to compute the histogram\n", NVECTORS);
 		
-		R = (R2-R1)*(float)rand() / (float)RAND_MAX + R1; // Random in R1..R2 range
-		phi = 2*PI * (float)rand() / (float)RAND_MAX; // Random in 0..2*Pi range
-		Jx = (int)(R * cos(phi) + 0.5);  // Random Jx
-		Jy = (int)(R * sin(phi) + 0.5);  // Random Jy
+		// Testing NVECTORS motion_search vectors in the RMIN..RMAX range, computing the cumulative histogram of bright pixels,
+		// which we use to place p_min threshold
+		float delta_p = 2.0; // Initial offset when computing the histogram, in sgm units
+		p_min = p0 + delta_p*sgm;  // Initial guess for p_min
+		h_Pixel_counter = 0;
+		cudaMemcpy(d_Pixel_counter, &h_Pixel_counter, sizeof(unsigned int), cudaMemcpyHostToDevice);
+		cudaDeviceSynchronize();
+		gettimeofday (&tdr0, NULL);  
+		float R, phi;
+		int iv = 0;
+		int iv0 = 0;
+		float R1, R2;
 		if (finetune)
 		{
-			// Distance from the cloud center (MQ units):
-			float dR = sqrt(pow(Jx-Center_pix[2]/MQ,2) + pow(Jy-Center_pix[3]/MQ,2));
-			// In finetuning mode, we exclude the neighbourhood of the cluster when computing the histogram:
-			if (dR < RMAX)
-				continue;
+			// In finetune mode, we compute the histogram from the range of the motion vectors
+			// centered around the cloud center motion vector R0:
+			R1 = R0 - RMAX;
+			R2 = R0 + RMAX;
+		}
+		else
+		{
+			R1 = RMIN;
+			R2 = RMAX;
 		}
 		
-		find_kernel_parameters(Jx, Jy, MQ, Nx, Ny, &Grid_size, &Ix1, &Iy1, crop, h_dx_offset[0], h_dy_offset[0]);
-		motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,Jx,Jy,MQ,p_min,
-		   d_dt,d_test_image,d_list,0,d_Pixel_counter,Nx,Ny,crop,d_dx_offset,d_dy_offset);		
+		do
+		{
+			iv0++;
+			
+			R = (R2-R1)*(float)rand() / (float)RAND_MAX + R1; // Random in R1..R2 range
+			phi = 2*PI * (float)rand() / (float)RAND_MAX; // Random in 0..2*Pi range
+			Jx = (int)(R * cos(phi) + 0.5);  // Random Jx
+			Jy = (int)(R * sin(phi) + 0.5);  // Random Jy
+			if (finetune)
+			{
+				// Distance from the cloud center (MQ units):
+				float dR = sqrt(pow(Jx-Center_pix[2]/MQ,2) + pow(Jy-Center_pix[3]/MQ,2));
+				// In finetuning mode, we exclude the neighbourhood of the cluster when computing the histogram:
+				if (dR < RMAX)
+					continue;
+			}
+			
+			find_kernel_parameters(Jx, Jy, MQ, Nx, Ny, &Grid_size, &Ix1, &Iy1, crop, h_dx_offset[0], h_dy_offset[0]);
+			motion_search_cuda <<<Grid_size, Block_size>>> (d_image,N_images,pitch,Ix1,Iy1,Jx,Jy,MQ,p_min,
+			   d_dt,d_test_image,d_list,0,d_Pixel_counter,Nx,Ny,crop,d_dx_offset,d_dy_offset);		
+			
+			iv++;
+		}
+		while (iv < NVECTORS && iv0 < 10*NVECTORS);
 		
-		iv++;
+		if (iv == 0)
+		{
+			printf("\nSomething wrong in histogram computation!\n");
+			if (finetune)
+				printf("Likely RMAX is too large, in finetune mode\n");
+			exit(1);
+		}
+		
+		ERR( cudaDeviceSynchronize() )
+		gettimeofday (&tdr1, NULL);  
+		tdr = tdr0;
+		timeval_subtract (&restime, &tdr1, &tdr);
+		dt_motion_search = restime / NVECTORS; // time per one motion_search_cude run, in seconds
+
+		ERR( cudaMemcpy(&h_Pixel_counter, d_Pixel_counter, sizeof(unsigned int), cudaMemcpyDeviceToHost))
+		cudaDeviceSynchronize();
+		
+		if (h_Pixel_counter == 0)
+		{
+			// Decrease the initial guess for p_min above
+			printf("\n No pixels detected during histogram calculation!\n\n");
+			exit(1);
+		}
+
+		int *h_hist = (int *)malloc(NBIN * sizeof(int));
+		int *d_hist = NULL;
+		cudaMalloc(&d_hist, NBIN * sizeof(int));		
+		cudaMemset(d_hist, 0, NBIN * sizeof(int));
+		float del_sgm = sgm * DEL_SGM;
+		int BS = 256;
+		int NBlocks = (h_Pixel_counter + BS - 1) / BS;
+		compute_histogram <<<NBlocks, BS>>> (d_list, h_Pixel_counter, p_min, del_sgm, d_hist);
+		ERR( cudaMemcpy(h_hist, d_hist, NBIN*sizeof(int), cudaMemcpyDeviceToHost))
+
+		if (h_hist[NBIN-1] > N_noise)
+		{
+			printf("\nToo much noise in the last bin!\n");
+			printf("Increase N_noise, increase NBIN, or increase DEL_SGM.\n");
+			printf("This might be a sign of a bright moving object in the images.\n\n");
+			exit(1);
+		}
+
+		int pix_sum = 0;
+		int bin = 0;
+		for (bin=NBIN-1; bin>=0; bin--)
+		{
+			pix_sum = pix_sum + h_hist[bin];
+			if (pix_sum > N_noise)
+				break;
+		}
+
+		// New value of p_min based on the analysis of the histogram:
+		// It is such that there are no more than N_noise detected pixels cumulatively
+		// for NVECTORS random motion vectors.
+		p_min = p_min + del_sgm*(bin+1);
+
+		printf("\nHistogram: p_min=%e, offset=%f std\n\n", p_min, delta_p+(bin+1)*DEL_SGM);
+		
 	}
-	while (iv < NVECTORS && iv0 < 10*NVECTORS);
-	
-	if (iv == 0)
-	{
-		printf("\nSomething wrong in histogram computation!\n");
-		if (finetune)
-			printf("Likely RMAX is too large, in finetune mode\n");
-		exit(1);
-	}
-	
-	ERR( cudaDeviceSynchronize() )
-    gettimeofday (&tdr1, NULL);  
-    tdr = tdr0;
-    timeval_subtract (&restime, &tdr1, &tdr);
-	float dt_motion_search = restime / NVECTORS; // time per one motion_search_cude run, in seconds
-
-	ERR( cudaMemcpy(&h_Pixel_counter, d_Pixel_counter, sizeof(unsigned int), cudaMemcpyDeviceToHost))
-	cudaDeviceSynchronize();
-	
-	if (h_Pixel_counter == 0)
-	{
-		// Decrease the initial guess for p_min above
-		printf("\n No pixels detected during histogram calculation!\n\n");
-		exit(1);
-	}
-
-	int *h_hist = (int *)malloc(NBIN * sizeof(int));
-	int *d_hist = NULL;
-	cudaMalloc(&d_hist, NBIN * sizeof(int));		
-	cudaMemset(d_hist, 0, NBIN * sizeof(int));
-	float del_sgm = sgm * DEL_SGM;
-	int BS = 256;
-	int NBlocks = (h_Pixel_counter + BS - 1) / BS;
-	compute_histogram <<<NBlocks, BS>>> (d_list, h_Pixel_counter, p_min, del_sgm, d_hist);
-	ERR( cudaMemcpy(h_hist, d_hist, NBIN*sizeof(int), cudaMemcpyDeviceToHost))
-
-	if (h_hist[NBIN-1] > N_noise)
-	{
-		printf("\nToo much noise in the last bin!\n");
-		printf("Increase N_noise, increase NBIN, or increase DEL_SGM.\n");
-		printf("This might be a sign of a bright moving object in the images.\n\n");
-		exit(1);
-	}
-
-	int pix_sum = 0;
-	int bin = 0;
-	for (bin=NBIN-1; bin>=0; bin--)
-	{
-		pix_sum = pix_sum + h_hist[bin];
-		if (pix_sum > N_noise)
-			break;
-	}
-
-	// New value of p_min based on the analysis of the histogram:
-	// It is such that there are no more than N_noise detected pixels cumulatively
-	// for NVECTORS random motion vectors.
-	p_min = p_min + del_sgm*(bin+1);
-
-	printf("\nHistogram: p_min=%e, offset=%f std\n\n", p_min, delta_p+(bin+1)*DEL_SGM);
 	
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++	
 
@@ -679,12 +711,12 @@ int main(int argc, char **argv)
 		
 //--------------  The longest part of the code: image stacking for different motion vectors on GPU -----	
 
-	if (finetune == 0)
+	if (finetune == 0 && no_histogram == 0)
 	{
 		// Estimating how long the motion search will take:
 		int NMS = PI*(RMAX*RMAX-RMIN*RMIN); // Estimated number of motion vectors
 		float dt_estimate = NMS * dt_motion_search;
-		printf("\nEstimated search time: %f seconds; N = %d\n\n", dt_estimate, NMS);
+		printf("\nEstimation: search time ~ %d seconds, ~ %d motion vectors\n\n", (int)(dt_estimate+0.5), NMS);
 	}
 
 	printf("\n\n === Motion search ===\n\n");
@@ -741,7 +773,7 @@ int main(int argc, char **argv)
 	else
 	{
 		printf("Processed %d motion vectors\n\n", Jcount);
-		printf ("Time per motion vector: %e\n", restime/Jcount);
+		printf ("Time per motion vector: %e seconds\n", restime/Jcount);
 		
 		ERR( cudaMemcpy(&h_Pixel_counter, d_Pixel_counter, sizeof(unsigned int), cudaMemcpyDeviceToHost))
 		cudaDeviceSynchronize();
@@ -796,7 +828,7 @@ int main(int argc, char **argv)
 //			printf("Cluster analysis CPU: %e s\n", restime);
 			tdr = tdr1;
 			timeval_subtract (&restime, &tdr2, &tdr);
-			printf("Cluster analysis GPU: %e s\n", restime);
+			printf("Cluster analysis timing: %e s\n", restime);
 			
 
 			FILE *fp;
@@ -848,7 +880,10 @@ int main(int argc, char **argv)
 				
 				ERR( cudaMemcpy2D(h_test_image, Ny*sizeof(float), d_test_image, pitch, Ny*sizeof(float), Nx, cudaMemcpyDeviceToHost) )
 				cudaDeviceSynchronize();
-				sprintf(fits_name,"cloud_%03d.fit", icloud);
+				if (finetune)
+					sprintf(fits_name,"cloud_fine_%03d.fit", icloud);
+				else
+					sprintf(fits_name,"cloud_%03d.fit", icloud);
 				
 				save_cloud_fits(Nx_ini, Ny_ini, Nx, Ny, 1, h_test_image, fits_name, name0, cloud, icloud,
 					sgm, rebin, d_rebin, bias, crop, h_dx_offset[0], h_dy_offset[0]);

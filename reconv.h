@@ -16,8 +16,8 @@
 // 1: the tightest clusters possible (only one out of 4 dimensions differs by 1)
 // 4: the loosest clusters possible (all 4 dimensions may differ by 1)
 // 1 is the best when minimizing the chance that two closely located clusters merge into one
-// 4 is the best when minimizing the chance that the halo of pixels from another cluster
-// is mistakenly assigned to a new cluster
+// 4 is the best when minimizing the chance that the part of a cluster
+// is mistakenly assigned to another cluster
 #define CL_MAX 4
 
 // Mask test value:

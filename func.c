@@ -1039,7 +1039,7 @@ void grow_masked_stars(float *img, int Nx, int Ny, float mask_sgm, int *N_exclud
 			
 	for (int i=0; i<Nx*Ny; i++)
 	{
-		if (mask[i] > 0.1*vmax)
+		if (mask[i] > 0.01*vmax)
 			img[i] = MASK0;
 		if (img[i] < MASK)
 			(*N_excluded)++;
