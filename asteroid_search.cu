@@ -168,7 +168,7 @@ int main(int argc, char **argv)
 				break;
 			}
 			string_is_a_float(argv[j]);
-			p_min0 = atoi(argv[j]);
+			p_min0 = atof(argv[j]);
 			assert(p_min0 > 0 && p_min0 < 1);
 			no_histogram = 1;
 		}		
