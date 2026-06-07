@@ -33,6 +33,7 @@ int main(int argc, char **argv)
 
 
 	// Reading the annotation file
+	// Format: ANNOTATE= '1704.28;2384.27;1714.28;2394.27;-1.4;32761;⚠ obsolete;32761;'
 	int i = -1;
     while (fgets(buffer, sizeof(buffer), fannot) != NULL) 
 	{
