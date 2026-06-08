@@ -1,5 +1,6 @@
-/* The main program in Asteroid_detector package. Searches for moving star-like objects
-in the imaging sequence which was pre-processed with "reconv". Uses GPU acceleration (CUDA).
+/* ADIS: Asteroid Discovery in Image Sequences
+     
+	The second step in the two-step procedure. Requires an NVIDIA GPU.
 
 To compile:
 
@@ -31,6 +32,9 @@ int main(int argc, char **argv)
 	
 	if (argc == 1)
 	{
+		printf("\n          *** ADIS: Asteroid Discovery in Image Sequences ***          \n\n");
+		printf(" Stage 2 (out of 2): search for moving objects\n");
+		
 		printf("\n Syntax (any order):\n\n");
 		printf(" %s  -RMAX value  -Step value  image1 image2 ... \n\n", argv[0]);
 		printf("\n Obligatory arguments:\n\n");
@@ -391,33 +395,6 @@ int main(int argc, char **argv)
 			2*RMAXf*FWHM pixels. Together, it is 2*(RMINf+RMAXf)*FWHM pixels.
 
 			It is a good idea to have the base image (i_image=0) span whole 31x31 pixels tiles.
-
-			The cluster may be located near the edge of the original base image. To properly account
-			for this:
-			
-			1) Draw a box of the size 2*RMINf*FWHM pixels centered at the cluster's center, in the base
-			   image.
-			2) If the box goes beyond one or both image edges, those box sides need to be cropped.
-			3) As a result, the box may no longer be centered at the cluster center, and be square
-			4) Now add the room for the motion vector changes, by adding RMAXf*FWHM to all 4 sides.
-			5) The new box may still be uncentered at the cluster's center. It may also extend
-			   beyond the original image sides for some cropped images. These extended areas will
-			   need to be masked.
-			6) Placing this box inside the base image, extend the (uncropped) sides to make sure
-			   that the borders of the rectangular are at 31-pixels tile borders for the original
-			   base image. Store the ranges of the tile indexes which cover the whole box. These
-			   ranges will need to be provided to find_kernel_parameters() later.
-			7) For non-base images, shift the crop box from the base image using the motion vector and dt.
-			8) Now find_kernel_parameters() will use the exact ranges for tile indexes (Ix1, Iy1, Grid_size)
-			   for the base image.
-			9) Inside motion_search_cuda(), pretend that we are still dealling with full resolution images.
-			10) Only in the spots were we read or write image pixels, we replace [ix,iy] with 
-			   [ix-dx_offset,iy-dy_offset].
-			   
-			A comment: the extra step fo cropping the base image boundaries if they go beyond the original
-			image borders (step 2) may not be necessary. If you skip that part: all cropped images will
-			be centered at the (shifted) cluster center, and they will all be square. This may simplify
-			the procedure. The disadvantage: may spend more cycles on masked areas, probably not a big deal.			
 			*/
 
 			float dt = (mjd - mjd0) / (mjd_last - mjd0); // fractional time difference
@@ -429,8 +406,6 @@ int main(int argc, char **argv)
 			// Cropping and bias subtracting from buf0 -> h_image1
 			cropping(buf0, Nx_ini, Ny_ini, Nx, Ny, bias, h_dx_offset[i_image], h_dy_offset[i_image],
 					 h_image1);
-//	dump_fits(Nx, Ny, 1, h_image1, "test.fit");
-//	exit(0);
 		}
 		else
 			// Subtracting bias from each image, and optional rebinning:
@@ -811,7 +786,7 @@ int main(int argc, char **argv)
 			cudaDeviceSynchronize();
 			gettimeofday (&tdr0, NULL);  
 
-			// Cluster analysis on the CPU:
+			// Cluster analysis on the CPU (I just keep it for comparison with the GPU version):
 //			cluster_analysis(h_list, h_Pixel_counter, Cluster_index, &N_cloud);
 			
 			cudaDeviceSynchronize();

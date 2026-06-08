@@ -12,8 +12,8 @@
 	
 	Outputs: the processed image sequence, B&W FITS files. All static objects
 	(stars, galaxies etc) are removed, images are Gaussian smoothed to reduce
-	the noise level, bilinear background removal applied at the end. The omages should look
-	like pure noise, with some blask masked areas ()to hide bright stars artifacts).
+	the noise level, bilinear background removal applied at the end. The images should look
+	like pure noise, with some blask masked areas (to hide bright stars artifacts).
 
 	You need to install FFTW3 and CFITSIO libraries.
 	
@@ -423,7 +423,6 @@ int main(int argc, char **argv)
 		fits_copy_header(f1, fout, &status); // We copy all header info from input to output images
 		fits_error(status);
 
-			// We add +1 to avoid allocating scratch arrays internally again
 		gauss_blur(Nx, Ny, img1, img1, sgm_blur);
 
 		//3-sigma clipping and bias removal for the individual image

@@ -1,7 +1,7 @@
 #include "reconv.h"
 
 // Used for my_alloc routines:
-#define N_POINTERS 3 // the depth of stack for allocating both real an complex arrays
+#define N_POINTERS 3 // the depth of stack for allocating both real and complex arrays
 struct MyStructure { 
 int i_real;
 int i_complex;
@@ -29,14 +29,12 @@ void my_alloc_init (int P)
 		MA.CP[i] = NULL;
 	}
 
-//printf("Init\n");	
 	return;
 }
 
 /* ------------------------------------------------ */
 float* my_alloc_real ()
 {
-//printf("my_alloc_real1, %d %d %d\n", MA.i_real, MA.N_real, MA.P);	
 
 	MA.i_real++;
 	
@@ -52,7 +50,6 @@ float* my_alloc_real ()
 		MA.N_real++;
 	}
 	
-//printf("my_alloc_real2, %d %d %d\n", MA.i_real, MA.N_real, MA.P);	
 
 	return MA.FP[MA.i_real];	
 }
@@ -60,7 +57,6 @@ float* my_alloc_real ()
 /* ------------------------------------------------ */
 fftw_complex* my_alloc_complex ()
 {	
-//printf("my_alloc_complex1, %d %d\n", MA.i_complex, MA.N_complex);	
 	MA.i_complex++;
 	
 	if (MA.i_complex<0 || MA.i_complex >= N_POINTERS)
@@ -75,14 +71,12 @@ fftw_complex* my_alloc_complex ()
 		MA.N_complex++;
 	}
 	
-//printf("my_alloc_complex2, %d %d\n", MA.i_complex, MA.N_complex);	
 	return MA.CP[MA.i_complex];	
 }
 
 /* ------------------------------------------------ */
 void my_free_real(float *p)
 {
-//printf("my_free_real1, %d %d\n", MA.i_real, MA.N_real);	
 	MA.i_real--;
 	
 	if (MA.i_real<-1 || MA.i_real >= N_POINTERS)
@@ -91,13 +85,11 @@ void my_free_real(float *p)
 		exit(1);
 	}
 
-//printf("my_free_real2, %d %d\n", MA.i_real, MA.N_real);	
 }
 
 /* ------------------------------------------------ */
 void my_free_complex(fftw_complex *p)
 {
-//printf("my_free_complex1, %d %d\n", MA.i_complex, MA.N_complex);	
 	MA.i_complex--;
 	
 	if (MA.i_complex<-1 || MA.i_complex >= N_POINTERS)
@@ -106,7 +98,6 @@ void my_free_complex(fftw_complex *p)
 		exit(1);
 	}
 
-//printf("my_free_complex2, %d %d\n", MA.i_complex, MA.N_complex);		
 }
 
 /* ------------------------------------------------ */
@@ -563,8 +554,6 @@ void sigma_clipping(float *image, long plane_pixels, double Nsigma, double *p0, 
 /* ------------------------------------------------ */
 
 	void gauss_blur(int Nx, int Ny, float* img, float *img_out, float sgm)
-	// Works with two different cases cas (0, 1), operates two different sets of arrays
-	// Thre stages: -1 (initial), 0 (continuing), 1 (finalize)
 	// Applying gaussian blur to img, with sgm radius
 	{		
 		float* R;
@@ -578,7 +567,6 @@ void sigma_clipping(float *image, long plane_pixels, double Nsigma, double *p0, 
 
 		// Fill an image with a Gaussian, using circular shifts and padding:
 		float *G = my_alloc_real();
-		//(float *)malloc(sizeof(float) * P);
 		double sum = 0.0;
 		double sgm2 = sgm*sgm;
 		double cutoff2 = (double)(Pad*Pad);
@@ -604,15 +592,12 @@ void sigma_clipping(float *image, long plane_pixels, double Nsigma, double *p0, 
 			G[i] /= sum;
 
 		FG = my_alloc_complex();
-		//fftw_malloc(sizeof(fftw_complex)*P);
 		FI = my_alloc_complex();
-		//fftw_malloc(sizeof(fftw_complex)*P);
 		
 		fft_image(Px, Py, G, FG);
 		
 		my_free_real(G);
 		R = my_alloc_real();
-		//(float *)malloc(sizeof(float) * P);
 				
 		fft_images_padded(Nx, Ny, Px, Py, img, FI, Pad);
 		
