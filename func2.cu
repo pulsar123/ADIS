@@ -27,32 +27,6 @@ void Is_GPU_present()
     }
   return;
 }
-/* ------------------------------------------------ */
-
-double MJD_FITS (fitsfile *f0)
-// Computing the MJD (Modified Julian calendar Date) value (in days) corresponding to the middle
-// of the exposure, based on the FITS file header.
-{
-	char date_obs[30];
-	int year, month, day, hour, minute;
-    double second, exposure;	
-	int status = 0;
-		
-	fits_read_key(f0, TSTRING, "DATE-OBS", date_obs, NULL, &status);
-	fits_error(status);
-
-	fits_read_key(f0, TDOUBLE, "EXPTIME", &exposure, NULL, &status);
-	fits_error(status);
-
-	fits_str2time(date_obs, &year, &month, &day,
-			  &hour, &minute, &second, &status);
-	fits_error(status);
-	
-	 // Modified Julian Date (UT) of the middle of exposure
-	double mjd = exposure/2.0/86400 + date2mjd (year, month, day) + ((second/60.0+minute)/60.0+hour)/24.0;
-	
-	return mjd;
-}	
 
 	
 /* ------------------------------------------------ */
@@ -227,58 +201,6 @@ __global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch,
 /* ------------------------------------------------ */
 
 	
-__global__ void subtract_master_image (float **d_image, int N_images, size_t pitch, int Ix1, int Iy1, float *master_image, int Nx, int Ny)
-{
-	
-	__shared__ float master_tile[32][33];
-	__shared__ float image_tile[32][33];
-	
-	// tile indexes:
-	int Ixb = blockIdx.x;
-	int Iyb = blockIdx.y;
-
-	// Coordinates of the pixels within the tile:
-	int jx = threadIdx.y;
-	int jy = threadIdx.x; // Fastest changing index
-
-	// image pixel coordinates:
-	int ix = jx + 32*Ixb;
-	int iy = jy + 32*Iyb;  // Fastest changing index
-	
-	if (ix >= Nx || iy >= Ny)
-		return;
-
-	// Reading the master image:
-	float *row = (float *)((char*)master_image + ix * pitch);
-	master_tile[jx][jy] = row[iy] / N_images; // Coalesced read
-	
-	__syncthreads();
-		
-	// Loping over all images sequentially:
-	for (int i=0; i<N_images; i++)
-	{	
-		float *row = (float *)((char*)d_image[i] + ix * pitch);
-		image_tile[jx][jy] = row[iy]; // Coalesced read
-
-		__syncthreads();
-		
-		// Subtracting the master image from every image, saving it back:
-		row[iy] = image_tile[jx][jy] - master_tile[jx][jy];
-		
-		__syncthreads(); 		
-	}
-
-	return;
-}
-
-
-
-
-/* ------------------------------------------------ */
-
-
-
-	
 void find_kernel_parameters(int Jx, int Jy, float MQ, int Nx, int Ny, dim3 *Grid_size, int *Ix1, int *Iy1, int crop, int X0, int Y0)
 {
 	// In crop mode,we always use the same base tiles, regardless of the motion vector
@@ -338,128 +260,7 @@ void find_kernel_parameters(int Jx, int Jy, float MQ, int Nx, int Ny, dim3 *Grid
 	return;
 }	
 /* ------------------------------------------------ */
-	void cluster_analysis(List h_list, unsigned int Pixel_counter, int *Cluster_index, int *N_cloud)
-	/* Carrying out cluster analysis in 4D on list.
-	Output: Cluster_index vector containing cluster associations for each pixel.
-	*/
-	{
-		int *members = (int *)malloc(Pixel_counter*sizeof(int));
-		int *next_members = (int *)malloc(Pixel_counter*sizeof(int));
-		
-		for (int i=0; i<Pixel_counter; i++)
-		{
-			Cluster_index[i] = -1; // Initially no cluster is assigned
-		}
-		
-		int i_max, del, pixel_is_neighbour, N_next;
-		int counter = -1;
-		
-		// Outer (cluster) loop: 
-		do
-		{
-			// Finding the brightest pixel for the next cluster
-			float p_max = -1e30;
-			i_max = -1;
-			for (int i=0; i<Pixel_counter; i++)
-			{
-				float p = h_list.p[i];
-				if (Cluster_index[i]==-1 && p>p_max)
-				{
-					p_max = p;
-					i_max = i;
-				}
-			}
-			
-			if (i_max == -1)
-				break;  // We ran out of unassigned pixels
-			
-			counter++;  // Incrementing the cluster counter
-			Cluster_index[i_max] = counter;
-			
-			// Initial list of cluster members contains only the brightest pixel:
-			members[0] = i_max;			
-			int N_members = 1;
-			
-			// The while loop to go over iterations of members
-			do
-			{
-				N_next = 0;
-				// Finding all cluster members iteratively
-				for (int i=0; i<Pixel_counter; i++)
-				{
-					if (Cluster_index[i] == -1)
-					{
-						pixel_is_neighbour = 0;
-						for (int j=0; j<N_members; j++)
-						{
-							// Computing the closeness parameter
-							int cl = 0;
-							
-							del = abs(h_list.Jx[members[j]]-h_list.Jx[i]);
-							if (del < 2)
-								cl = cl + del;
-							else
-								continue;
-								
-							del = abs(h_list.Jy[members[j]]-h_list.Jy[i]);
-							if (del < 2)
-								cl = cl + del;
-							else
-								continue;
-								
-							del = abs(h_list.ix[members[j]]-h_list.ix[i]);
-							if (del < 2)
-								cl = cl + del;
-							else
-								continue;
-								
-							del = abs(h_list.iy[members[j]]-h_list.iy[i]);
-							if (del < 2)
-								cl = cl + del;
-							else
-								continue;
-								
-							// Accepting the pixel as the new cluster member if it's close enough:
-							if (cl>0 && cl <= CL_MAX)
-							{
-								pixel_is_neighbour = 1;
-								break;
-							}											
-						}
-						
-						if (pixel_is_neighbour == 1)
-						{							
-							Cluster_index[i] = counter;
-							N_next++;
-							next_members[N_next-1] = i;												
-						}										
-					}
-				}
-				
-				// Copying the next_members list to current members list:
-				if (N_next > 0)
-				{
-					N_members = N_next;
-					for (int j=0; j<N_members; j++)
-					{
-						members[j] = next_members[j];
-					}
-				}			
-			}
-			while(N_next > 0);
-			
-//			printf("Found cluster %d\n", counter);
-			
-		}
-		while(i_max != -1);
-		
-		printf("Found %d clusters\n", counter+1);
-		*N_cloud = counter + 1;
 
-		return;
-		
-	}
-/* ------------------------------------------------ */
 
 	void cluster_analysis_cuda(List d_list, unsigned int Pixel_counter, int *h_cloud, int *N_cloud)
 	/* Carrying out the cluster analysis on GPU. The results (cloud ID for each pixel from the input d_list) are stored
@@ -1232,5 +1033,175 @@ __global__ void find_free_pixel (int *d_cloud, unsigned int Pixel_counter, int N
 		}
 	}
 }
+	
+__global__ void subtract_master_image (float **d_image, int N_images, size_t pitch, int Ix1, int Iy1, float *master_image, int Nx, int Ny)
+{
+	
+	__shared__ float master_tile[32][33];
+	__shared__ float image_tile[32][33];
+	
+	// tile indexes:
+	int Ixb = blockIdx.x;
+	int Iyb = blockIdx.y;
+
+	// Coordinates of the pixels within the tile:
+	int jx = threadIdx.y;
+	int jy = threadIdx.x; // Fastest changing index
+
+	// image pixel coordinates:
+	int ix = jx + 32*Ixb;
+	int iy = jy + 32*Iyb;  // Fastest changing index
+	
+	if (ix >= Nx || iy >= Ny)
+		return;
+
+	// Reading the master image:
+	float *row = (float *)((char*)master_image + ix * pitch);
+	master_tile[jx][jy] = row[iy] / N_images; // Coalesced read
+	
+	__syncthreads();
+		
+	// Loping over all images sequentially:
+	for (int i=0; i<N_images; i++)
+	{	
+		float *row = (float *)((char*)d_image[i] + ix * pitch);
+		image_tile[jx][jy] = row[iy]; // Coalesced read
+
+		__syncthreads();
+		
+		// Subtracting the master image from every image, saving it back:
+		row[iy] = image_tile[jx][jy] - master_tile[jx][jy];
+		
+		__syncthreads(); 		
+	}
+
+	return;
+}
+
+
+	void cluster_analysis(List h_list, unsigned int Pixel_counter, int *Cluster_index, int *N_cloud)
+	// Carrying out cluster analysis in 4D on list.
+	// Output: Cluster_index vector containing cluster associations for each pixel.
+	//
+	{
+		int *members = (int *)malloc(Pixel_counter*sizeof(int));
+		int *next_members = (int *)malloc(Pixel_counter*sizeof(int));
+		
+		for (int i=0; i<Pixel_counter; i++)
+		{
+			Cluster_index[i] = -1; // Initially no cluster is assigned
+		}
+		
+		int i_max, del, pixel_is_neighbour, N_next;
+		int counter = -1;
+		
+		// Outer (cluster) loop: 
+		do
+		{
+			// Finding the brightest pixel for the next cluster
+			float p_max = -1e30;
+			i_max = -1;
+			for (int i=0; i<Pixel_counter; i++)
+			{
+				float p = h_list.p[i];
+				if (Cluster_index[i]==-1 && p>p_max)
+				{
+					p_max = p;
+					i_max = i;
+				}
+			}
+			
+			if (i_max == -1)
+				break;  // We ran out of unassigned pixels
+			
+			counter++;  // Incrementing the cluster counter
+			Cluster_index[i_max] = counter;
+			
+			// Initial list of cluster members contains only the brightest pixel:
+			members[0] = i_max;			
+			int N_members = 1;
+			
+			// The while loop to go over iterations of members
+			do
+			{
+				N_next = 0;
+				// Finding all cluster members iteratively
+				for (int i=0; i<Pixel_counter; i++)
+				{
+					if (Cluster_index[i] == -1)
+					{
+						pixel_is_neighbour = 0;
+						for (int j=0; j<N_members; j++)
+						{
+							// Computing the closeness parameter
+							int cl = 0;
+							
+							del = abs(h_list.Jx[members[j]]-h_list.Jx[i]);
+							if (del < 2)
+								cl = cl + del;
+							else
+								continue;
+								
+							del = abs(h_list.Jy[members[j]]-h_list.Jy[i]);
+							if (del < 2)
+								cl = cl + del;
+							else
+								continue;
+								
+							del = abs(h_list.ix[members[j]]-h_list.ix[i]);
+							if (del < 2)
+								cl = cl + del;
+							else
+								continue;
+								
+							del = abs(h_list.iy[members[j]]-h_list.iy[i]);
+							if (del < 2)
+								cl = cl + del;
+							else
+								continue;
+								
+							// Accepting the pixel as the new cluster member if it's close enough:
+							if (cl>0 && cl <= CL_MAX)
+							{
+								pixel_is_neighbour = 1;
+								break;
+							}											
+						}
+						
+						if (pixel_is_neighbour == 1)
+						{							
+							Cluster_index[i] = counter;
+							N_next++;
+							next_members[N_next-1] = i;												
+						}										
+					}
+				}
+				
+				// Copying the next_members list to current members list:
+				if (N_next > 0)
+				{
+					N_members = N_next;
+					for (int j=0; j<N_members; j++)
+					{
+						members[j] = next_members[j];
+					}
+				}			
+			}
+			while(N_next > 0);
+			
+//			printf("Found cluster %d\n", counter);
+			
+		}
+		while(i_max != -1);
+		
+		printf("Found %d clusters\n", counter+1);
+		*N_cloud = counter + 1;
+
+		return;
+		
+	}
 */
+
+
+
 /* ------------------------------------------------ */

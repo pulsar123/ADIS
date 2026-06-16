@@ -39,6 +39,8 @@ void my_alloc_destroy();
 
 void fits_error(int status);
 
+double MJD_FITS (fitsfile *f0);
+
 void fft_image(int Nx, int Ny,
                 float *img0,
                 fftw_complex *F0);
@@ -89,6 +91,8 @@ void gauss_blur(int Nx, int Ny, float* img, float *img_out, float sgm);
 int timeval_subtract (double *result, struct timeval *x, struct timeval *y);
 
 void dump_fits (int Nx, int Ny, int Nc, float *img, const char *name);
+
+void dump_fits_rgb (int Nx, int Ny, int Nc, float *img, const char *name, float bias);
 
 void highpass_filter(const float *input, float *output,
                      int rows, int cols, double cutoff);

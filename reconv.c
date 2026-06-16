@@ -335,14 +335,19 @@ int main(int argc, char **argv)
     fits_get_img_size(f0, 3, naxes, &status);
     fits_error(status);
 
-    if (naxis != 3 || naxes[2] != 3) {
-        fprintf(stderr, "Error: expected RGB FITS image\n");
-        return EXIT_FAILURE;
-    }
+//    if (naxis != 3 || naxes[2] != 3) {
+//        fprintf(stderr, "Error: expected RGB FITS image\n");
+//        return EXIT_FAILURE;
+//    }
 
     int Nx = naxes[1]; // X axis is vertical
     int Ny = naxes[0]; // Y axis is horizontal
-    int Nc = 3;
+    int Nc;
+	// Now supporting both RGB and monochrome inpute images:
+	if (naxis == 3)
+		Nc = 3;
+	else
+		Nc = 1;
     long plane_pixels = (long)Nx * Ny;
 
 	// Initializing my memory management:
@@ -355,7 +360,8 @@ int main(int argc, char **argv)
     fits_error(status);
     fits_close_file(f0, &status);		
     fits_error(status);
-	image_bw(img0, plane_pixels, Nc); // converting to B&W
+	if (Nc == 3)
+		image_bw(img0, plane_pixels, Nc); // converting to monochrome
 
     /* ---------- Padding ---------- */
     int Px = Nx + (int)(2*Pad);
@@ -412,7 +418,8 @@ int main(int argc, char **argv)
 		fits_read_img(f1, TFLOAT, 1, plane_pixels * Nc, NULL, img1, NULL, &status);
 		fits_error(status);
 		
-		image_bw(img1, plane_pixels, Nc);  // converting to B&W, storing to the R channel of img1
+		if (Nc == 3)
+			image_bw(img1, plane_pixels, Nc);  // converting to B&W, storing to the R channel of img1
 
 		sprintf(file_out, "%s%s", prefix, file1);
 		sprintf(buffer, "rm -f %s >/dev/null", file_out);
@@ -555,8 +562,11 @@ int main(int argc, char **argv)
 		fits_update_key(fout, TLONG, "NAXIS2", &NX,
 						"length of y axis", &status);
 			fits_error(status);
-		fits_delete_key(fout, "NAXIS3", &status);
+		if (Nc == 3)
+		{
+			fits_delete_key(fout, "NAXIS3", &status);
 			fits_error(status);
+		}
 		long fpixel = 1;
 		long nelem1  = (long)Nx * Ny;	
 		fits_write_img(fout, TFLOAT, fpixel, nelem1, outbuf, &status);

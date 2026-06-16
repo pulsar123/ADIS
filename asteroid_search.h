@@ -75,18 +75,16 @@ void Is_GPU_present();
 
 int timeval_subtract (double *result, struct timeval *x, struct timeval *y);
 
-double MJD_FITS (fitsfile *f0);
-
 __global__ void motion_search_cuda (float **d_image, int N_images, size_t pitch, int Ix1, int Iy1, int Jx,
 	int Jy, float MQ, float p_min, float *d_dt, float *d_test_image, List d_list, int save_image, 
 	unsigned int *d_Pixel_counter, int Nx, int Ny, int crop, int *d_dx_offset, int *d_dy_offset);
 
-__global__ void subtract_master_image (float **d_image, int N_images, size_t pitch, int Ix1, int Iy1, float *master_image, int Nx, int Ny);
+// __global__ void subtract_master_image (float **d_image, int N_images, size_t pitch, int Ix1, int Iy1, float *master_image, int Nx, int Ny);
 
 void find_kernel_parameters(int Jx, int Jy, float MQ, int Nx, int Ny, dim3 *Grid_size, int *Ix1, int *Iy1,
 	int crop, int X0, int Y0);
 
-void cluster_analysis(List h_list, unsigned int Pixel_counter, int *Cluster_index, int *N_cloud);
+// void cluster_analysis(List h_list, unsigned int Pixel_counter, int *Cluster_index, int *N_cloud);
 
 void cluster_analysis_cuda(List d_list, unsigned int Pixel_counter, int *h_cloud, int *N_cloud);
 

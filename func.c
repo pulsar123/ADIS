@@ -139,6 +139,32 @@ int timeval_subtract (double *result, struct timeval *x, struct timeval *y)
   return x->tv_sec < y->tv_sec;
 }
 
+/* ------------------------------------------------ */
+
+double MJD_FITS (fitsfile *f0)
+// Computing the MJD (Modified Julian calendar Date) value (in days) corresponding to the middle
+// of the exposure, based on the FITS file header.
+{
+	char date_obs[30];
+	int year, month, day, hour, minute;
+    double second, exposure;	
+	int status = 0;
+		
+	fits_read_key(f0, TSTRING, "DATE-OBS", date_obs, NULL, &status);
+	fits_error(status);
+
+	fits_read_key(f0, TDOUBLE, "EXPTIME", &exposure, NULL, &status);
+	fits_error(status);
+
+	fits_str2time(date_obs, &year, &month, &day,
+			  &hour, &minute, &second, &status);
+	fits_error(status);
+	
+	 // Modified Julian Date (UT) of the middle of exposure
+	double mjd = exposure/2.0/86400 + date2mjd (year, month, day) + ((second/60.0+minute)/60.0+hour)/24.0;
+	
+	return mjd;
+}	
 
 /* ------------------------------------------------ */
 
@@ -652,8 +678,8 @@ void sigma_clipping(float *image, long plane_pixels, double Nsigma, double *p0, 
 		fits_create_img(fk, FLOAT_IMG, 2, naxes, &status);
 		fits_error(status);
 
-		sprintf(buffer, "1500:800:1600:900:-1.0:Cloud 0:");
-		fits_write_key(fk, TSTRING, "ANNOTATE", buffer, NULL, &status);
+//		sprintf(buffer, "1500:800:1600:900:-1.0:Cloud 0:");
+//		fits_write_key(fk, TSTRING, "ANNOTATE", buffer, NULL, &status);
 
 		long fpixel = 1;
 		fits_write_img(fk, TFLOAT, fpixel, nelem1, img1, &status);
@@ -662,6 +688,39 @@ void sigma_clipping(float *image, long plane_pixels, double Nsigma, double *p0, 
 		
 		free(img1);
 		
+		return;
+	}
+	
+
+/* ------------------------------------------------ */
+
+
+	
+	void dump_fits_rgb (int Nx, int Ny, int Nc, float *img, const char *name, float bias)
+	// Dump a RGB image into a FITS file
+	{
+		char buffer[100];
+		int status=0; 
+		
+		long Npixels = Nx*Ny*Nc;
+				
+		sprintf(buffer, "rm -f %s >/dev/null", name);
+		if (system(buffer))
+			printf("Could not delete the file %s\n", name);
+		fitsfile *fk;
+		fits_create_file(&fk, name, &status);
+		fits_error(status);
+		
+		long nelem1  = (long)Nx * Ny * Nc;
+		long naxes[3] = {Ny, Nx, Nc};
+		fits_create_img(fk, FLOAT_IMG, 3, naxes, &status);
+		fits_error(status);
+
+		long fpixel = 1;
+		fits_write_img(fk, TFLOAT, fpixel, nelem1, img, &status);
+		fits_error(status);
+		fits_close_file(fk, &status);		
+				
 		return;
 	}
 	
@@ -678,6 +737,10 @@ void image_bw(float *image, long Npix, int Nc)
 		float b = image[2*Npix + i];
 		if (r>MASK && g>MASK && b>MASK)
 			// The colors are RGB; storing the B&W image into the red channel
+			// The coefficients here are not to achieve a proper color conversion
+			// (this is not required for asteroid discovery)
+			// Instead, they simply reflect the statistical fact that there 2x more
+			// green pixels than either red or blue ones
 			image[i] = 0.25*(r + 2*g + b);
 			else
 			image[i] = MASK0;
