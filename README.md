@@ -4,7 +4,7 @@ This package is aimed at amateur astrophotographers. Its purpose is discovery (s
 targeted) of faint/invisible moving star-like objects in imaging sequences taken with a telescope and an astro
 camera. These could be asteroids, faint comets, potentially interstellar visitors. In most cases, the objects are too faint to show up in individual images.
 
-The software is command line only (no GUI). For now, the only input images suppoted are RGB fits files (from OSC cameras). (Though it'd be a very easy fix to support monochromatic cameras as well.)
+The software is command line only (no GUI). Only FITS files are supported (RGB or monochrome). 
 
 The package consists of two principal steps/programs:
 
@@ -29,6 +29,8 @@ sudo apt install build-essential
 sudo apt install libcfitsio-dev
 
 sudo apt install libfftw3-dev
+
+sudo apt install zlib1g-dev
 ```
 
 To install CUDA, follow this link: https://developer.nvidia.com/cuda-downloads . If you are using WSL (under Windows), choose "Linux" option, and then "WSL-Ubuntu" option. Next, choose version 2.0, next: choose "deb-local". (Here is the [direct link](https://developer.nvidia.com/cuda-downloads?target_os=Linux&target_arch=x86_64&Distribution=WSL-Ubuntu&target_version=2.0&target_type=deb_local).) Then simply follow the instructions.
